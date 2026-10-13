@@ -1,0 +1,495 @@
+/**
+ * DTO (contrat API) → View Models (écrans). SEUL endroit qui connaît les deux formes.
+ * Si l'API change, on modifie dto.ts + ce fichier ; les écrans ne bougent pas.
+ */
+import type * as D from "./contracts/dto";
+import * as F from "./format/datetime";
+import type { AuthenticatedUser } from "@/types/auth";
+import type { AvatarTone, FormatId, LevelRef, LocationFormatId, TutorGender } from "@/types/common";
+import type { Category } from "@/types/category";
+import type { BeneficiaryType, EducationLevel, LearningObjective, LocationFormatOption } from "@/types/search";
+import type { Offer, OfferPlace, OfferSlot } from "@/types/offer";
+import type { Tutor, TutorOfferSummary } from "@/types/tutor";
+import type { TutorProfileSummary } from "@/types/tutor-profile";
+import type { DifficultyId, Relationship, SavedBeneficiary } from "@/types/beneficiary";
+import type { Booking, BookingOffer, TeachingModeId } from "@/types/booking";
+import type { TutorAvailabilitySlot } from "@/types/availability";
+import type { ConversationMessage, ConversationSummary } from "@/types/message";
+import type { AppNotification, AppNotificationType } from "@/types/notification";
+import type { TutorReview } from "@/types/review";
+import type { TutorApplication, TutorDocumentKind, TutorSkill } from "@/types/tutor-application";
+
+// ---------- enums ----------
+export const lower = <T extends string>(v: T) => v.toLowerCase() as Lowercase<T>;
+export const upper = <T extends string>(v: T) => v.toUpperCase() as Uppercase<T>;
+
+export const RELATION_LABELS: Record<D.RelationshipType, string | null> = {
+  SELF: null,
+  CHILD: "Mon enfant",
+  SPOUSE: "Mon conjoint",
+  SIBLING: "Mon frère / ma sœur",
+  PARENT: "Mon parent",
+  RELATIVE: "Un proche",
+  OTHER: "Autre personne",
+};
+
+/** Libellés d'affichage des enums du bénéficiaire (la source de vérité des valeurs est le backend). */
+export const OBJECTIVE_LABELS: Record<string, string> = {
+  remedial: "Remise à niveau",
+  ongoing: "Accompagnement régulier",
+  excellence: "Approfondir",
+};
+export const DIFFICULTY_LABELS: Record<string, string> = {
+  theoretical: "Compréhension théorique",
+  practical: "Mise en pratique",
+  methodological: "Méthode de travail",
+  confidence: "Confiance en soi",
+  other: "Autre",
+};
+
+export function formatToList(format: D.TeachingFormat): FormatId[] {
+  if (format === "BOTH") return ["in_person", "online"];
+  return format === "ONLINE" ? ["online"] : ["in_person"];
+}
+export function formatToVm(format: D.TeachingFormat): LocationFormatId {
+  return format === "IN_PERSON" ? "in_person" : format === "ONLINE" ? "online" : "both";
+}
+export function formatToDto(format: LocationFormatId): D.TeachingFormat {
+  return format === "in_person" ? "IN_PERSON" : format === "online" ? "ONLINE" : "BOTH";
+}
+export function teachingModeToFormat(mode: D.TeachingMode): FormatId {
+  return mode === "ONLINE" ? "online" : "in_person";
+}
+
+/** Couleur d'avatar stable dérivée de l'id (donnée purement UI). */
+const TONES: AvatarTone[] = ["primary", "violet", "accent", "success", "warning"];
+export function avatarTone(id: string): AvatarTone {
+  const n = Array.from(id).reduce((s, c) => s + c.charCodeAt(0), 0);
+  return TONES[n % TONES.length];
+}
+const initial = (s: string | null | undefined) => (s?.trim()[0] ?? "?").toUpperCase();
+
+// ---------- référentiels ----------
+export const toCategory = (s: D.SubjectDto): Category => ({ id: s.id, label: s.name, group: s.category });
+export const toLevel = (l: D.EducationLevelDto): LevelRef => ({
+  id: l.id,
+  label: l.name,
+  category: l.category,
+  requiredDegree: l.requiredDegree ? (lower(l.requiredDegree) as LevelRef["requiredDegree"]) : undefined,
+});
+export const toEducationLevel = (l: D.EducationLevelDto): EducationLevel => toLevel(l);
+export const toBeneficiaryType = (o: D.EnumOptionDto<D.RelationshipType>): BeneficiaryType => ({
+  id: lower(o.value),
+  label: o.label,
+  description: o.description ?? null,
+});
+export const toObjective = (o: D.EnumOptionDto<D.ObjectiveType>): LearningObjective => ({
+  id: lower(o.value),
+  label: o.label,
+});
+export const toLocationFormat = (o: D.EnumOptionDto<D.TeachingFormat>): LocationFormatOption => ({
+  id: formatToVm(o.value),
+  label: o.label,
+});
+export const toSkill = (s: D.SubjectDto): TutorSkill => ({
+  id: s.id,
+  label: s.name,
+  category: s.category ?? "",
+  description: s.description ?? "",
+  scope: null,
+  levelCategories: s.levelCategories ?? [],
+  isVerified: s.isVerified ?? true,
+});
+
+// ---------- auth ----------
+export function toAuthenticatedUser(me: D.MeDto): AuthenticatedUser {
+  return {
+    id: me.id,
+    firstName: me.firstName,
+    lastName: me.lastName,
+    email: me.email,
+    phone: me.phone,
+    emailVerified: me.emailVerified,
+    status: lower(me.status),
+    selfBeneficiaryId: me.selfBeneficiaryId ?? null,
+    tutor: me.tutor
+      ? {
+          tutorProfileId: me.tutor.tutorProfileId,
+          applicationStatus: lower(me.tutor.applicationStatus),
+          isVisible: me.tutor.isVisible,
+          isSuspended: me.tutor.isSuspended,
+        }
+      : null,
+    isAdmin: me.isAdmin,
+    lessonAlarm: me.lessonAlarm ?? { enabled: true, leadMinutes: 30 },
+  };
+}
+
+// ---------- créneaux ----------
+export function slotId(availabilityId: string, startAt: string): string {
+  return `${availabilityId}@${startAt}`;
+}
+export function toSlot(s: D.SlotDto): OfferSlot {
+  return {
+    id: slotId(s.availabilityId, s.startAt),
+    availabilityId: s.availabilityId,
+    placeId: s.placeId,
+    startAt: s.startAt,
+    endAt: s.endAt,
+    teachingMode: s.teachingMode ? (lower(s.teachingMode) as TeachingModeId) : null,
+    date: F.localDate(s.startAt),
+    dateLabel: F.dateLabel(s.startAt),
+    startTime: F.localTime(s.startAt),
+    endTime: F.localTime(s.endAt),
+    timeRangeLabel: F.timeRangeLabel(s.startAt, s.endAt),
+    status: "available",
+    pendingRequests: s.pendingRequests ?? 0,
+  };
+}
+
+// ---------- offres ----------
+const toOfferPlace = (p: D.PlacePublicDto): OfferPlace => ({ id: p.id, label: p.label, type: lower(p.type) });
+function placesLabel(places: D.PlacePublicDto[], format: D.TeachingFormat): string {
+  if (format === "ONLINE") return "En ligne";
+  const physical = places.filter((p) => p.type !== "ONLINE").map((p) => p.label);
+  return physical.length ? physical.join(", ") : "À définir";
+}
+export const toGender = (g: D.TutorGenderDto | null | undefined): TutorGender | null => (g === "MALE" ? "male" : g === "FEMALE" ? "female" : null);
+const tutorName = (t: D.TutorSummaryDto) => t.displayName ?? `${t.firstName} ${t.lastName}`.trim();
+
+export function toOffer(o: D.OfferDto, slots: D.SlotDto[] = []): Offer {
+  return {
+    id: o.id,
+    tutorId: o.tutor.id,
+    tutorName: tutorName(o.tutor),
+    tutorInitial: initial(o.tutor.firstName),
+    tutorGender: toGender(o.tutor.gender),
+    tutorPhotoUrl: o.tutor.profilePhoto,
+    title: o.title,
+    description: o.description,
+    subjectId: o.subject.id,
+    subjectLabel: o.subject.name,
+    levelId: o.educationLevel?.id ?? null,
+    levelLabel: o.educationLevel?.name ?? "Tous niveaux",
+    durationMinutes: o.durationMinutes,
+    durationLabel: F.durationLongLabel(o.durationMinutes),
+    format: formatToVm(o.format),
+    formats: formatToList(o.format),
+    places: o.places.map(toOfferPlace),
+    location: placesLabel(o.places, o.format),
+    price: { amount: Number(o.price.amount), currency: o.price.currency },
+    priceLabel: F.priceLabel(o.price),
+    isActive: o.isActive && !o.disabledByAdmin,
+    isDisabledByAdmin: o.disabledByAdmin,
+    slots: slots.map(toSlot),
+  };
+}
+export const toTutorOfferSummary = (o: D.OfferSummaryDto): TutorOfferSummary => ({
+  id: o.id,
+  title: o.title,
+  durationLabel: F.durationShortLabel(o.durationMinutes),
+  formats: formatToList(o.format),
+  priceLabel: F.priceLabel(o.price),
+});
+
+// ---------- tuteurs ----------
+function nextSlotLabel(iso: string | null): string {
+  if (!iso) return "Aucun créneau cette semaine";
+  const p = F.toLocalParts(iso);
+  const h = p.minutes ? `${p.hours}h${String(p.minutes).padStart(2, "0")}` : `${p.hours}h`;
+  return `Prochain créneau : ${F.dayName(p.dayOfWeek).toLowerCase()} ${h}`;
+}
+function unionFormats(offers: D.OfferSummaryDto[]): FormatId[] {
+  const set = new Set<FormatId>();
+  offers.forEach((o) => formatToList(o.format).forEach((f) => set.add(f)));
+  return [...set];
+}
+
+export function toTutorFromSearch(r: D.SearchResultDto): Tutor {
+  const place = r.nearestPlace;
+  return {
+    id: r.tutor.id,
+    firstName: r.tutor.firstName,
+    lastName: r.tutor.lastName,
+    avatarTone: avatarTone(r.tutor.id),
+    photoUrl: r.tutor.profilePhoto,
+    gender: toGender(r.tutor.gender),
+    rating: r.tutor.rating,
+    reviewCount: r.tutor.reviewsCount,
+    isVerified: r.tutor.isVerified,
+    subjects: r.subjects,
+    levels: r.levels,
+    formats: unionFormats(r.offers),
+    location: {
+      label: place ? (place.type === "ONLINE" ? "En ligne" : place.label) : "En ligne",
+      distanceKm: r.distanceMeters == null ? null : Math.round(r.distanceMeters / 100) / 10,
+      latitude: place?.latitude ?? null,
+      longitude: place?.longitude ?? null,
+    },
+    nextSlotLabel: nextSlotLabel(r.nextSlotAt),
+    bio: r.bioExcerpt ?? "",
+    offers: r.offers.map(toTutorOfferSummary),
+  };
+}
+
+function groupSubjects(subjects: D.TutorSubjectDto[]) {
+  const map = new Map<string, { skill: { id: string; label: string }; levels: LevelRef[] }>();
+  for (const ts of subjects) {
+    const entry = map.get(ts.subject.id) ?? { skill: { id: ts.subject.id, label: ts.subject.name }, levels: [] };
+    entry.levels.push(toLevel(ts.educationLevel));
+    map.set(ts.subject.id, entry);
+  }
+  return [...map.values()];
+}
+
+export function toTutorFromPublic(t: D.TutorPublicDto): Tutor {
+  const physical = t.places.find((p) => p.type !== "ONLINE") ?? t.places[0];
+  const grouped = groupSubjects(t.subjects);
+  return {
+    id: t.id,
+    firstName: t.firstName,
+    lastName: t.lastName,
+    avatarTone: avatarTone(t.id),
+    photoUrl: t.profilePhoto,
+    gender: toGender(t.gender),
+    rating: t.rating,
+    reviewCount: t.reviewsCount,
+    isVerified: t.isVerified,
+    subjects: grouped.map((g) => g.skill.label),
+    levels: [...new Set(t.subjects.map((s) => s.educationLevel.name))],
+    formats: unionFormats(t.offers),
+    location: {
+      label: physical ? (physical.type === "ONLINE" ? "En ligne" : physical.label) : "En ligne",
+      distanceKm: null,
+      latitude: physical?.latitude ?? null,
+      longitude: physical?.longitude ?? null,
+    },
+    nextSlotLabel: nextSlotLabel(t.nextSlotAt),
+    bio: t.bio ?? "",
+    offers: t.offers.filter((o) => o.isActive).map(toTutorOfferSummary),
+    subjectLevels: grouped.map((g) => ({ subjectLabel: g.skill.label, levels: g.levels })),
+  };
+}
+
+export function toTutorProfileSummary(t: D.TutorPrivateDto, isSuspended = !!t.suspendedAt): TutorProfileSummary {
+  const grouped = groupSubjects(t.subjects);
+  return {
+    id: t.id,
+    firstName: t.firstName,
+    lastName: t.lastName,
+    avatarInitials: `${initial(t.firstName)}${initial(t.lastName)}`,
+    avatarTone: avatarTone(t.id),
+    gender: toGender(t.gender),
+    photoUrl: t.profilePhoto,
+    rating: t.rating,
+    reviewCount: t.reviewsCount,
+    bio: t.bio ?? "",
+    skills: grouped.map((g) => g.skill),
+    subjects: grouped,
+    locations: t.places
+      .filter((p) => p.type !== "ONLINE")
+      .map((p) => ({ id: p.id, label: p.label, radiusKm: p.radiusMeters == null ? null : p.radiusMeters / 1000 })),
+    applicationStatus: lower(t.applicationStatus),
+    isVisible: t.isVisible,
+    isSuspended,
+  };
+}
+
+// ---------- bénéficiaires ----------
+export function toSavedBeneficiary(b: D.BeneficiaryDto): SavedBeneficiary {
+  return {
+    id: b.id,
+    firstName: b.firstName,
+    lastName: b.lastName ?? "",
+    isSelf: b.isSelf,
+    relationship: lower(b.relationship) as Relationship,
+    relationLabel: RELATION_LABELS[b.relationship],
+    level: b.educationLevel ? toLevel(b.educationLevel) : null,
+    objective: b.objective ? lower(b.objective) : null,
+    difficulty: b.difficultyType ? (lower(b.difficultyType) as DifficultyId) : null,
+    preferredFormat: b.preferredFormat ? formatToVm(b.preferredFormat) : null,
+    notes: b.notes,
+  };
+}
+
+// ---------- réservations ----------
+function toBookingOffer(b: D.BookingDto): BookingOffer {
+  const o = b.offer;
+  return {
+    id: o.id,
+    tutorId: b.tutor.id,
+    tutorName: tutorName(b.tutor),
+    tutorInitial: initial(b.tutor.firstName),
+    tutorGender: toGender(b.tutor.gender),
+    tutorPhotoUrl: b.tutor.profilePhoto,
+    title: b.offerTitle, // snapshot, pas le titre courant
+    subjectLabel: o.subject.name,
+    levelLabel: o.educationLevel?.name ?? "Tous niveaux",
+    durationMinutes: o.durationMinutes,
+    durationLabel: F.durationLongLabel(o.durationMinutes),
+    format: formatToVm(o.format),
+    formats: formatToList(o.format),
+    location: b.locationLabel ?? (b.teachingMode === "ONLINE" ? "En ligne" : "À définir"),
+    priceLabel: F.priceLabel(b.price),
+  };
+}
+
+export function toBooking(b: D.BookingDto): Booking {
+  const slot: OfferSlot = {
+    ...toSlot({ availabilityId: b.availabilityId ?? "none", offerId: b.offer.id, placeId: b.placeId, startAt: b.startAt, endAt: b.endAt, teachingMode: b.teachingMode }),
+    status: "unavailable",
+  };
+  return {
+    id: b.id,
+    status: lower(b.status),
+    viewerRole: lower(b.viewerRole),
+    offer: toBookingOffer(b),
+    slot,
+    beneficiary: {
+      id: b.beneficiary.id,
+      firstName: b.beneficiary.firstName,
+      lastName: b.beneficiary.lastName ?? "",
+      relationship: lower(b.beneficiary.relationship) as Relationship,
+      relationLabel: RELATION_LABELS[b.beneficiary.relationship],
+      level: b.beneficiary.educationLevel ? toLevel(b.beneficiary.educationLevel) : null,
+      difficulty: b.beneficiary.difficultyType ? (lower(b.beneficiary.difficultyType) as DifficultyId) : null,
+      objective: b.beneficiary.objective ? (lower(b.beneficiary.objective) as "remedial" | "ongoing" | "excellence") : null,
+    },
+    requester: { id: b.requester.id, firstName: b.requester.firstName, lastName: b.requester.lastName ?? "" },
+    teachingMode: lower(b.teachingMode) as TeachingModeId,
+    locationLabel: b.locationLabel,
+    locationAddress: b.locationAddress,
+    note: b.requesterNote ?? "",
+    conversationId: b.conversationId,
+    refusalReason: b.refusalReason,
+    cancellationReason: b.cancellationReason,
+    cancelledBy: b.cancelledBy ? lower(b.cancelledBy) : null,
+    hasReview: b.hasReview,
+    competingRequests: (b.competingRequests ?? []).map((c) => ({ id: c.id, beneficiaryFirstName: c.beneficiaryFirstName, requesterName: c.requesterName, createdAt: c.createdAt })),
+    canReview: b.viewerRole === "REQUESTER" && b.status === "COMPLETED" && !b.hasReview,
+    createdAt: b.createdAt,
+    sessionStartedAt: b.startedAt ?? undefined,
+    sessionCompletedAt: b.completedAt ?? undefined,
+    sessionDurationLabel: b.startedAt && b.completedAt ? F.elapsedLabel(b.startedAt, b.completedAt) : undefined,
+    sessionMode: b.startedAt ? teachingModeToFormat(b.teachingMode) : undefined,
+  };
+}
+
+// ---------- disponibilités ----------
+export function toAvailability(a: D.AvailabilityDto): TutorAvailabilitySlot {
+  const oneOff = !!a.validFrom && a.validFrom === a.validUntil;
+  const label = oneOff ? F.dateLabel(a.validFrom!) : `Chaque ${F.dayName(a.dayOfWeek).toLowerCase()}`;
+  const online = a.place?.type === "ONLINE";
+  return {
+    id: a.id,
+    kind: oneOff ? "one_off" : "recurring",
+    dayOfWeek: a.dayOfWeek,
+    dayLabel: label,
+    date: oneOff ? a.validFrom : null,
+    dateLabel: label,
+    startTime: a.startTime,
+    endTime: a.endTime,
+    timeRangeLabel: F.hhmmRangeLabel(a.startTime, a.endTime),
+    placeId: a.place?.id ?? null,
+    offerId: a.offerId,
+    format: online ? "online" : "in_person",
+    locationLabel: a.place ? (online ? "En ligne" : a.place.label) : "Lieu à préciser",
+  };
+}
+
+// ---------- conversations ----------
+export function toConversationSummary(c: D.ConversationDto): ConversationSummary {
+  const name = c.viewerRole === "REQUESTER" ? tutorName(c.tutor) : `${c.requester.firstName} ${c.requester.lastName ?? ""}`.trim();
+  return {
+    id: c.id,
+    status: lower(c.status),
+    viewerRole: lower(c.viewerRole),
+    counterpartName: name,
+    counterpartInitial: initial(name),
+    ...(c.viewerRole === "REQUESTER" ? { counterpartGender: toGender(c.tutor.gender), counterpartPhotoUrl: c.tutor.profilePhoto } : {}),
+    bookingId: c.bookingId,
+    lastMessagePreview: c.lastMessagePreview,
+    lastMessageAt: c.lastMessageAt,
+    unreadCount: c.unreadCount,
+    canSend: c.canSend,
+    canCall: c.canCall,
+  };
+}
+
+export function toMessage(m: D.MessageDto, bookingId: string | null = null): ConversationMessage {
+  const base = {
+    id: m.id,
+    conversationId: m.conversationId,
+    bookingId,
+    authorLabel: m.isMine ? "Vous" : m.senderFirstName ?? "EduLoc",
+    isMine: m.isMine,
+    createdAt: m.createdAt,
+  };
+  if (m.type === "VOICE" && m.attachment) {
+    return {
+      ...base,
+      type: "voice",
+      attachmentId: m.attachment.id,
+      durationMs: m.attachment.durationMs ?? 0,
+      durationLabel: F.audioDurationLabel(m.attachment.durationMs),
+      waveform: m.attachment.waveform ?? [],
+      listenedAt: m.listenedAt,
+      transcript: m.attachment.transcript,
+    };
+  }
+  if (m.type === "DOCUMENT" && m.attachment) {
+    return {
+      ...base,
+      type: "document",
+      attachmentId: m.attachment.id,
+      fileName: m.attachment.fileName ?? "document",
+      fileSizeLabel: F.fileSizeLabel(m.attachment.sizeBytes),
+      mimeType: m.attachment.mimeType,
+    };
+  }
+  return { ...base, type: m.type === "CALL_EVENT" ? "call_event" : "system", text: m.systemText ?? "" };
+}
+
+// ---------- notifications ----------
+export function toNotification(n: D.NotificationDto, now = new Date()): AppNotification {
+  const data = (n.data ?? {}) as { bookingId?: string; conversationId?: string };
+  return {
+    id: n.id,
+    type: lower(n.type) as AppNotificationType,
+    title: n.title,
+    message: n.message,
+    isRead: n.isRead,
+    createdAt: n.createdAt,
+    timeLabel: F.relativeTimeLabel(n.createdAt, now),
+    dateGroup: F.dateGroupLabel(n.createdAt, now),
+    target: data.bookingId || data.conversationId ? { bookingId: data.bookingId, conversationId: data.conversationId } : null,
+  };
+}
+
+// ---------- avis ----------
+export const toReview = (r: D.ReviewDto): TutorReview => ({
+  id: r.id,
+  rating: r.rating,
+  text: r.text,
+  authorFirstName: r.authorFirstName,
+  createdAt: r.createdAt,
+  dateLabel: F.dateLabel(r.createdAt),
+  officialReply: r.officialReply,
+});
+
+// ---------- candidature ----------
+export function toTutorApplication(a: D.TutorApplicationDto): TutorApplication {
+  return {
+    id: a.id,
+    status: lower(a.status),
+    submittedAt: a.submittedAt,
+    rejectionReason: a.rejectionReason,
+    subjects: a.subjects.map((s) => ({ skillId: s.subject.id, skillLabel: s.subject.name, level: toLevel(s.educationLevel) })),
+    documents: a.documents.map((d) => ({
+      id: d.id,
+      kind: lower(d.type) as TutorDocumentKind,
+      fileName: d.fileName,
+      status: lower(d.status),
+    })),
+  };
+}

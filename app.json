@@ -25,12 +25,38 @@
     },
     "plugins": [
       "expo-router",
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "EduLoc accède à votre photothèque pour sélectionner votre vidéo de présentation.",
+          "microphonePermission": false
+        }
+      ],
       [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "EduLoc utilise le micro pour enregistrer vos messages vocaux et passer des appels."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/sounds/ringtone.wav"]
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "EduLoc utilise votre position pour trouver des tuteurs près de chez vous."
         }
       ]
     ],
