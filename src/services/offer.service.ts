@@ -22,6 +22,7 @@ function toCreateDto(i: CreateOfferInput): CreateOfferRequestDto {
     description: i.description,
     subjectId: i.subjectId,
     educationLevelId: i.levelId,
+    ...(i.trackId ? { trackId: i.trackId } : {}),
     format: formatToDto(i.format),
     durationMinutes: i.durationMinutes,
     price: i.price,
@@ -33,6 +34,7 @@ function toUpdateDto(i: UpdateOfferInput): UpdateOfferRequestDto {
   if (i.description !== undefined) out.description = i.description;
   if (i.subjectId !== undefined) out.subjectId = i.subjectId;
   if (i.levelId !== undefined) out.educationLevelId = i.levelId;
+  if (i.trackId !== undefined) out.trackId = i.trackId;
   if (i.format !== undefined) out.format = formatToDto(i.format);
   if (i.durationMinutes !== undefined) out.durationMinutes = i.durationMinutes;
   if (i.price !== undefined) out.price = i.price;

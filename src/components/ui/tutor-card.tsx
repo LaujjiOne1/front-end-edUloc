@@ -58,6 +58,11 @@ export function TutorCard({ tutor, onPress, disabled }: TutorCardProps) {
           <Text className="mt-[2px] text-[13px] text-ink-soft" numberOfLines={1}>
             {[tutor.subjects[0], tutor.levels[0]].filter(Boolean).join(" • ")}
           </Text>
+          {tutor.matchReasons && tutor.matchReasons.length > 0 ? (
+            <Text className="mt-1 text-[12.5px] font-semibold text-primary" numberOfLines={2}>
+              {tutor.matchReasons.join(" • ")}
+            </Text>
+          ) : null}
           <View className="mt-[6px] flex-row items-center gap-[5px]">
             <LocationIcon size={13} color="#9799AF" />
             <Text className="flex-1 text-[12.5px] text-ink-faint" numberOfLines={1}>

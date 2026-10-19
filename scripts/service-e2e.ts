@@ -266,7 +266,7 @@ async function main() {
     gender: "female",
     subjects: [{ skillId: physics.id, levelIds: [terminale.id], competenceDescription: "Mécanique" }, { skillId: custom.skill.id, levelIds: [terminale.id] }],
     offers: [{ subjectId: physics.id, educationLevelId: terminale.id, title: "Physique Terminale", description: "Cours complet.", format: "both", durationMinutes: 60, price: 21000, currency: "MGA" }],
-    locations: [{ label: "Ivandry", radiusKm: 5, isPrimary: true, latitude: -18.8733, longitude: 47.5311 }],
+    locations: [{ label: "Ivandry", kind: "beneficiary_home", radiusKm: 5, isPrimary: true, latitude: -18.8733, longitude: 47.5311 }],
     weeklyAvailability: [{ dayOfWeek: 2, slots: [{ startTime: "18:00", endTime: "21:00", format: "both", placeIndex: 0 }] }],
     documents: [{ kind: "identity", file: dataFile("application/pdf", "%PDF-1.4 cni", "cni.pdf") }],
     introVideo: { file: dataFile("video/mp4", "x".repeat(900), "intro.mp4"), durationMs: 45000 },

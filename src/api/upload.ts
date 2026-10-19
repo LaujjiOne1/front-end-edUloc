@@ -17,6 +17,13 @@ function nativeFiles(): typeof import("expo-file-system/legacy") {
   return require("expo-file-system/legacy");
 }
 
+/** PUT d'un fichier local avec la nouvelle API d'expo-file-system (`File.upload`), chargée à la demande. */
+async function nextFileUpload(url: string, uri: string, headers: Record<string, string>): Promise<{ status: number }> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { File } = require("expo-file-system") as typeof import("expo-file-system");
+  return new File(uri).upload(url, { httpMethod: "PUT", headers });
+}
+
 /** Variantes de type audio rencontrées selon l'appareil → le type que le serveur accepte. */
 const AUDIO_ALIASES: Record<string, string> = {
   "audio/m4a": "audio/mp4",
@@ -68,18 +75,26 @@ export async function uploadToSignedUrl(ticket: UploadTicketDto, file: LocalFile
   const url = rebaseLocalhost(ticket.signedUrl);
 
   if (isReactNative()) {
-    const files = nativeFiles();
+    const headers = { "Content-Type": file.mimeType, "x-upsert": "false" };
     let status: number;
     try {
-      const result = await files.uploadAsync(url, file.uri, {
-        httpMethod: "PUT",
-        uploadType: files.FileSystemUploadType.BINARY_CONTENT,
-        headers: { "Content-Type": file.mimeType, "x-upsert": "false" },
-      });
-      status = result.status;
-    } catch (error) {
-      const detail = error instanceof Error ? ` (${error.message})` : "";
-      throw ApiError.local("network_error", `L'envoi du fichier a échoué. Vérifiez votre connexion et réessayez.${detail}`);
+      const files = nativeFiles();
+      status = (
+        await files.uploadAsync(url, file.uri, {
+          httpMethod: "PUT",
+          uploadType: files.FileSystemUploadType.BINARY_CONTENT,
+          headers,
+        })
+      ).status;
+    } catch (legacyError) {
+      // L'ancienne API refuse parfois un fichier pourtant copié par le sélecteur (« Location … isn't readable » sur
+      // Android) : la nouvelle API de fichiers, qui a ses propres droits d'accès, prend le relais.
+      try {
+        status = (await nextFileUpload(url, file.uri, headers)).status;
+      } catch (nextError) {
+        const detail = nextError instanceof Error ? nextError.message : legacyError instanceof Error ? legacyError.message : "";
+        throw ApiError.local("network_error", `L'envoi du fichier a échoué. Vérifiez votre connexion et réessayez.${detail ? ` (${detail})` : ""}`);
+      }
     }
     if (status === 401 || status === 403) throw ApiError.local("upload_expired", "L'envoi a expiré. Recommencez.");
     if (status < 200 || status >= 300) {

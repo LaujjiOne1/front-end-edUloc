@@ -4,7 +4,7 @@ import { ActivityIndicator, Modal, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { isApiError } from "@/api/errors";
-import { CrosshairIcon, LocationIcon, PlusIcon, TrashIcon, XIcon } from "@/components/icons";
+import { CrosshairIcon, HouseIcon, LocationIcon, PlusIcon, TrashIcon, XIcon } from "@/components/icons";
 import { FadeIn } from "@/components/motion/fade-in";
 import { PressableScale } from "@/components/motion/pressable-scale";
 import { AuthHeader } from "@/components/ui/auth-header";
@@ -20,24 +20,34 @@ const TOTAL_STEPS = 9;
 const RADIUS_OPTIONS = [5, 10, 15, 20, 30];
 
 /**
- * Lieux d'intervention du tuteur. Chaque lieu est une adresse GÉOCODÉE (coordonnées réelles) :
- * la recherche des demandeurs est géographique, un lieu sans coordonnées ne serait jamais trouvé.
- * Zone principale = le tuteur se déplace chez l'élève dans le rayon choisi ; lieux secondaires =
- * points de rencontre (bibliothèque, campus…).
+ * Lieux d'intervention du tuteur, selon les façons d'enseigner en présentiel choisies à l'étape précédente.
+ * Chaque lieu est une adresse GÉOCODÉE (coordonnées réelles) : la recherche des demandeurs est géographique,
+ * un lieu sans coordonnées ne serait jamais trouvé.
+ *  - « Je me déplace chez l'élève » : une zone et son rayon d'activité ;
+ *  - « J'accueille chez moi » : l'adresse d'accueil ;
+ *  - « Lieu public » : un ou plusieurs points de rencontre (bibliothèque, campus…).
  */
 export function TutorLocationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const inPersonModes = useTutorApplicationStore((s) => s.inPersonModes);
   const locations = useTutorApplicationStore((s) => s.locations);
-  const setPrimaryLocation = useTutorApplicationStore((s) => s.setPrimaryLocation);
-  const updatePrimaryRadius = useTutorApplicationStore((s) => s.updatePrimaryRadius);
-  const addSecondaryLocation = useTutorApplicationStore((s) => s.addSecondaryLocation);
+  const setTravelZone = useTutorApplicationStore((s) => s.setTravelZone);
+  const updateTravelRadius = useTutorApplicationStore((s) => s.updateTravelRadius);
+  const setTutorHome = useTutorApplicationStore((s) => s.setTutorHome);
+  const addPublicPlace = useTutorApplicationStore((s) => s.addPublicPlace);
   const removeLocation = useTutorApplicationStore((s) => s.removeLocation);
 
-  const primaryLocation = locations.find((l) => l.isPrimary);
-  const secondaryLocations = locations.filter((l) => !l.isPrimary);
+  const travel = inPersonModes.includes("beneficiary_home");
+  const hosting = inPersonModes.includes("tutor_home");
+  const publicPlaces = inPersonModes.includes("public_place");
 
-  const [editingPrimary, setEditingPrimary] = useState(false);
+  const travelZone = locations.find((l) => l.kind === "beneficiary_home");
+  const tutorHome = locations.find((l) => l.kind === "tutor_home");
+  const meetingPlaces = locations.filter((l) => l.kind === "public_place");
+
+  const [editingTravel, setEditingTravel] = useState(false);
+  const [editingHome, setEditingHome] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
@@ -45,10 +55,15 @@ export function TutorLocationsScreen() {
   const [pickedPlace, setPickedPlace] = useState<ResolvedLocation | null>(null);
   const [newRadius, setNewRadius] = useState(10);
 
-  const choosePrimary = (place: ResolvedLocation) => {
-    setPrimaryLocation(place.label, { latitude: place.latitude, longitude: place.longitude });
-    setEditingPrimary(false);
+  const chooseTravelZone = (place: ResolvedLocation) => {
+    setTravelZone(place.label, { latitude: place.latitude, longitude: place.longitude });
+    setEditingTravel(false);
     setLocateError(null);
+  };
+
+  const chooseTutorHome = (place: ResolvedLocation) => {
+    setTutorHome(place.label, { latitude: place.latitude, longitude: place.longitude });
+    setEditingHome(false);
   };
 
   const useMyPosition = async () => {
@@ -56,7 +71,7 @@ export function TutorLocationsScreen() {
     setLocateError(null);
     setIsLocating(true);
     try {
-      choosePrimary(await LocationService.getCurrentPosition());
+      chooseTravelZone(await LocationService.getCurrentPosition());
     } catch (error) {
       setLocateError(isApiError(error) ? error.message : "Impossible de récupérer votre position.");
     } finally {
@@ -64,9 +79,9 @@ export function TutorLocationsScreen() {
     }
   };
 
-  const handleAddSecondary = () => {
+  const handleAddPublicPlace = () => {
     if (!pickedPlace) return;
-    addSecondaryLocation(pickedPlace.label, newRadius, { latitude: pickedPlace.latitude, longitude: pickedPlace.longitude });
+    addPublicPlace(pickedPlace.label, newRadius, { latitude: pickedPlace.latitude, longitude: pickedPlace.longitude });
     setPickedPlace(null);
     setNewRadius(10);
     setIsAddModalOpen(false);
@@ -76,6 +91,12 @@ export function TutorLocationsScreen() {
     setIsAddModalOpen(false);
     setPickedPlace(null);
   };
+
+  const missing: string[] = [];
+  if (travel && !travelZone) missing.push("votre zone de déplacement");
+  if (hosting && !tutorHome) missing.push("votre adresse d'accueil");
+  if (publicPlaces && meetingPlaces.length === 0) missing.push("au moins un lieu public");
+  const canContinue = missing.length === 0;
 
   return (
     <View className="flex-1 bg-paper" style={{ paddingTop: insets.top }}>
@@ -91,125 +112,165 @@ export function TutorLocationsScreen() {
         <FadeIn delay={40}>
           <Text className="mb-1 text-[24px] font-bold text-ink">Vos lieux d&apos;intervention</Text>
           <Text className="mb-4 text-[13.5px] text-ink-soft">
-            Définissez votre zone principale et vos lieux secondaires avec leur rayon d&apos;activité
+            {inPersonModes.length === 0
+              ? "Vous enseignez uniquement en ligne : aucun lieu à renseigner."
+              : "Renseignez les lieux correspondant à vos façons d'enseigner en présentiel"}
           </Text>
         </FadeIn>
 
-        {/* Lieu principal */}
-        <FadeIn delay={80}>
-          {primaryLocation && !editingPrimary ? (
-            <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
-              <View className="flex-row items-center gap-2">
-                <View className="h-8 w-8 items-center justify-center rounded-full bg-primary">
-                  <LocationIcon size={16} color="#fff" />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-[15px] font-bold text-ink">{primaryLocation.label}</Text>
-                  <Text className="text-[12px] font-semibold text-primary">Position principale</Text>
-                </View>
-                <PressableScale onPress={() => setEditingPrimary(true)} accessibilityLabel="Modifier la position principale">
-                  <Text className="text-[13px] font-bold text-primary">Modifier</Text>
-                </PressableScale>
-              </View>
-
-              {/* Sélection du rayon d'activité */}
-              <View className="mt-3.5 border-t border-line-soft pt-3">
-                <Text className="mb-2 text-[12px] font-semibold uppercase tracking-[0.03em] text-ink-soft">
-                  Rayon d&apos;activité autour du lieu : {primaryLocation.radiusKm} km
-                </Text>
-                <View className="flex-row gap-2">
-                  {RADIUS_OPTIONS.map((km) => {
-                    const isSelected = primaryLocation.radiusKm === km;
-                    return (
-                      <PressableScale key={km} onPress={() => updatePrimaryRadius(km)} accessibilityLabel={`${km} km`}>
-                        <View
-                          className={[
-                            "items-center justify-center rounded-lg border px-3 py-1.5",
-                            isSelected ? "border-primary bg-primary" : "border-line bg-paper",
-                          ].join(" ")}
-                        >
-                          <Text className={["text-[12.5px] font-bold", isSelected ? "text-white" : "text-ink"].join(" ")}>{km} km</Text>
-                        </View>
-                      </PressableScale>
-                    );
-                  })}
-                </View>
-              </View>
-            </View>
-          ) : (
-            <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
-              <Text className="mb-1 text-[15px] font-bold text-ink">Votre zone principale</Text>
-              <Text className="mb-3 text-[12.5px] text-ink-soft">
-                Le quartier ou la ville autour de laquelle vous vous déplacez chez vos élèves.
-              </Text>
-
-              <PressableScale onPress={useMyPosition} disabled={isLocating} accessibilityLabel="Utiliser ma position">
-                <View className="mb-3 flex-row items-center gap-3 rounded-lg border border-line bg-paper p-3">
-                  {isLocating ? <ActivityIndicator size="small" color="#332E86" /> : <CrosshairIcon size={18} color="#332E86" />}
-                  <Text className="flex-1 text-[14px] font-semibold text-ink">
-                    {isLocating ? "Localisation en cours..." : "Utiliser ma position"}
-                  </Text>
-                </View>
-              </PressableScale>
-              {locateError ? <Text className="mb-3 text-[12.5px] text-error">{locateError}</Text> : null}
-
-              <PlaceSearchField placeholder="Quartier, adresse, ville..." onSelect={choosePrimary} />
-
-              {primaryLocation ? (
-                <PressableScale onPress={() => setEditingPrimary(false)} accessibilityLabel="Annuler la modification">
-                  <Text className="mt-3 text-center text-[13px] font-semibold text-ink-soft">Annuler</Text>
-                </PressableScale>
-              ) : null}
-            </View>
-          )}
-        </FadeIn>
-
-        {/* Lieux secondaires */}
-        <FadeIn delay={120}>
-          <Text className="mb-2.5 text-[14px] font-bold text-ink">Lieux secondaires ({secondaryLocations.length})</Text>
-
-          {secondaryLocations.length === 0 ? (
-            <View className="mb-3 rounded-lg border border-dashed border-line bg-surface/60 p-4">
-              <Text className="text-center text-[13px] text-ink-soft">
-                Aucun lieu secondaire ajouté. Vous pouvez par exemple ajouter une bibliothèque, un campus ou un tiers-lieu.
-              </Text>
-            </View>
-          ) : (
-            <View className="mb-3 gap-2.5">
-              {secondaryLocations.map((loc) => (
-                <View key={loc.id} className="flex-row items-center gap-3 rounded-lg border border-line bg-surface p-3.5">
-                  <View className="h-9 w-9 items-center justify-center rounded-md bg-paper-alt">
-                    <LocationIcon size={16} color="#585B78" />
+        {/* Je me déplace chez l'élève */}
+        {travel ? (
+          <FadeIn delay={80}>
+            {travelZone && !editingTravel ? (
+              <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
+                <View className="flex-row items-center gap-2">
+                  <View className="h-8 w-8 items-center justify-center rounded-full bg-primary">
+                    <LocationIcon size={16} color="#fff" />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-[14.5px] font-bold text-ink">{loc.label}</Text>
-                    <Text className="text-[12px] text-ink-soft">Rayon dédié : {loc.radiusKm} km</Text>
+                    <Text className="text-[15px] font-bold text-ink">{travelZone.label}</Text>
+                    <Text className="text-[12px] font-semibold text-primary">Zone de déplacement chez l&apos;élève</Text>
                   </View>
-                  <PressableScale onPress={() => removeLocation(loc.id)} accessibilityLabel={`Supprimer ${loc.label}`}>
-                    <View className="p-1">
-                      <TrashIcon size={16} color="#E04F5F" />
-                    </View>
+                  <PressableScale onPress={() => setEditingTravel(true)} accessibilityLabel="Modifier la zone de déplacement">
+                    <Text className="text-[13px] font-bold text-primary">Modifier</Text>
                   </PressableScale>
                 </View>
-              ))}
-            </View>
-          )}
 
-          <PressableScale onPress={() => setIsAddModalOpen(true)} accessibilityLabel="Ajouter un lieu secondaire">
-            <View className="flex-row items-center gap-2 rounded-lg border border-dashed border-primary bg-primary-tint/30 p-3.5">
-              <PlusIcon size={17} color="#332E86" />
-              <Text className="text-[14px] font-bold text-primary">Ajouter un lieu secondaire</Text>
-            </View>
-          </PressableScale>
-        </FadeIn>
+                <View className="mt-3.5 border-t border-line-soft pt-3">
+                  <Text className="mb-2 text-[12px] font-semibold uppercase tracking-[0.03em] text-ink-soft">
+                    Rayon d&apos;activité autour du lieu : {travelZone.radiusKm} km
+                  </Text>
+                  <View className="flex-row gap-2">
+                    {RADIUS_OPTIONS.map((km) => {
+                      const isSelected = travelZone.radiusKm === km;
+                      return (
+                        <PressableScale key={km} onPress={() => updateTravelRadius(km)} accessibilityLabel={`${km} km`}>
+                          <View
+                            className={[
+                              "items-center justify-center rounded-lg border px-3 py-1.5",
+                              isSelected ? "border-primary bg-primary" : "border-line bg-paper",
+                            ].join(" ")}
+                          >
+                            <Text className={["text-[12.5px] font-bold", isSelected ? "text-white" : "text-ink"].join(" ")}>{km} km</Text>
+                          </View>
+                        </PressableScale>
+                      );
+                    })}
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
+                <Text className="mb-1 text-[15px] font-bold text-ink">Votre zone de déplacement</Text>
+                <Text className="mb-3 text-[12.5px] text-ink-soft">
+                  Le quartier ou la ville autour de laquelle vous vous déplacez chez vos élèves.
+                </Text>
+
+                <PressableScale onPress={useMyPosition} disabled={isLocating} accessibilityLabel="Utiliser ma position">
+                  <View className="mb-3 flex-row items-center gap-3 rounded-lg border border-line bg-paper p-3">
+                    {isLocating ? <ActivityIndicator size="small" color="#332E86" /> : <CrosshairIcon size={18} color="#332E86" />}
+                    <Text className="flex-1 text-[14px] font-semibold text-ink">
+                      {isLocating ? "Localisation en cours..." : "Utiliser ma position"}
+                    </Text>
+                  </View>
+                </PressableScale>
+                {locateError ? <Text className="mb-3 text-[12.5px] text-error">{locateError}</Text> : null}
+
+                <PlaceSearchField placeholder="Quartier, adresse, ville..." onSelect={chooseTravelZone} />
+
+                {travelZone ? (
+                  <PressableScale onPress={() => setEditingTravel(false)} accessibilityLabel="Annuler la modification">
+                    <Text className="mt-3 text-center text-[13px] font-semibold text-ink-soft">Annuler</Text>
+                  </PressableScale>
+                ) : null}
+              </View>
+            )}
+          </FadeIn>
+        ) : null}
+
+        {/* J'accueille chez moi */}
+        {hosting ? (
+          <FadeIn delay={100}>
+            {tutorHome && !editingHome ? (
+              <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
+                <View className="flex-row items-center gap-2">
+                  <View className="h-8 w-8 items-center justify-center rounded-full bg-primary">
+                    <HouseIcon size={16} color="#fff" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[15px] font-bold text-ink">{tutorHome.label}</Text>
+                    <Text className="text-[12px] font-semibold text-primary">Adresse d&apos;accueil</Text>
+                  </View>
+                  <PressableScale onPress={() => setEditingHome(true)} accessibilityLabel="Modifier l'adresse d'accueil">
+                    <Text className="text-[13px] font-bold text-primary">Modifier</Text>
+                  </PressableScale>
+                </View>
+              </View>
+            ) : (
+              <View className="mb-4 rounded-xl border border-primary/40 bg-surface p-4">
+                <Text className="mb-1 text-[15px] font-bold text-ink">Votre adresse d&apos;accueil</Text>
+                <Text className="mb-3 text-[12.5px] text-ink-soft">
+                  Là où vous recevez vos élèves. Elle n&apos;est communiquée qu&apos;une fois la réservation confirmée.
+                </Text>
+                <PlaceSearchField placeholder="Votre adresse, quartier..." onSelect={chooseTutorHome} />
+                {tutorHome ? (
+                  <PressableScale onPress={() => setEditingHome(false)} accessibilityLabel="Annuler la modification">
+                    <Text className="mt-3 text-center text-[13px] font-semibold text-ink-soft">Annuler</Text>
+                  </PressableScale>
+                ) : null}
+              </View>
+            )}
+          </FadeIn>
+        ) : null}
+
+        {/* Lieux publics */}
+        {publicPlaces ? (
+          <FadeIn delay={120}>
+            <Text className="mb-2.5 text-[14px] font-bold text-ink">Lieux publics ({meetingPlaces.length})</Text>
+
+            {meetingPlaces.length === 0 ? (
+              <View className="mb-3 rounded-lg border border-dashed border-line bg-surface/60 p-4">
+                <Text className="text-center text-[13px] text-ink-soft">
+                  Aucun lieu public ajouté. Par exemple une bibliothèque, un campus ou un tiers-lieu.
+                </Text>
+              </View>
+            ) : (
+              <View className="mb-3 gap-2.5">
+                {meetingPlaces.map((loc) => (
+                  <View key={loc.id} className="flex-row items-center gap-3 rounded-lg border border-line bg-surface p-3.5">
+                    <View className="h-9 w-9 items-center justify-center rounded-md bg-paper-alt">
+                      <LocationIcon size={16} color="#585B78" />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-[14.5px] font-bold text-ink">{loc.label}</Text>
+                      <Text className="text-[12px] text-ink-soft">Rayon dédié : {loc.radiusKm} km</Text>
+                    </View>
+                    <PressableScale onPress={() => removeLocation(loc.id)} accessibilityLabel={`Supprimer ${loc.label}`}>
+                      <View className="p-1">
+                        <TrashIcon size={16} color="#E04F5F" />
+                      </View>
+                    </PressableScale>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <PressableScale onPress={() => setIsAddModalOpen(true)} accessibilityLabel="Ajouter un lieu public">
+              <View className="flex-row items-center gap-2 rounded-lg border border-dashed border-primary bg-primary-tint/30 p-3.5">
+                <PlusIcon size={17} color="#332E86" />
+                <Text className="text-[14px] font-bold text-primary">Ajouter un lieu public</Text>
+              </View>
+            </PressableScale>
+          </FadeIn>
+        ) : null}
       </ScrollView>
 
-      {/* Modal Ajout Lieu Secondaire */}
+      {/* Modal ajout d'un lieu public */}
       <Modal visible={isAddModalOpen} transparent animationType="slide" onRequestClose={closeModal}>
         <View className="flex-1 justify-end bg-black/50">
           <View className="rounded-t-2xl bg-surface p-5" style={{ paddingBottom: Math.max(insets.bottom, 24) }}>
             <View className="mb-4 flex-row items-center justify-between">
-              <Text className="text-[18px] font-bold text-ink">Nouveau lieu secondaire</Text>
+              <Text className="text-[18px] font-bold text-ink">Nouveau lieu public</Text>
               <PressableScale onPress={closeModal} accessibilityLabel="Fermer">
                 <View className="h-8 w-8 items-center justify-center rounded-full bg-paper">
                   <XIcon size={16} color="#585B78" />
@@ -238,16 +299,16 @@ export function TutorLocationsScreen() {
               ))}
             </View>
 
-            <Button label="Ajouter ce lieu" disabled={!pickedPlace} onPress={handleAddSecondary} />
+            <Button label="Ajouter ce lieu" disabled={!pickedPlace} onPress={handleAddPublicPlace} />
           </View>
         </View>
       </Modal>
 
       <View className="border-t border-line-soft bg-surface px-5 pt-4" style={{ paddingBottom: Math.max(insets.bottom, 22) }}>
-        {!primaryLocation ? (
-          <Text className="mb-3 text-center text-[12.5px] text-ink-soft">Choisissez votre zone principale pour continuer.</Text>
+        {!canContinue ? (
+          <Text className="mb-3 text-center text-[12.5px] text-ink-soft">Renseignez {missing.join(", ")} pour continuer.</Text>
         ) : null}
-        <Button label="Continuer" disabled={!primaryLocation} onPress={() => router.push(TUTOR_AVAILABILITY_ROUTE)} />
+        <Button label="Continuer" disabled={!canContinue} onPress={() => router.push(TUTOR_AVAILABILITY_ROUTE)} />
       </View>
     </View>
   );

@@ -1,5 +1,5 @@
 import type { LocalFile } from "./message";
-import type { DegreeId, LevelRef, LocationFormatId, TutorGender } from "./common";
+import type { DegreeId, InPersonModeId, LevelRef, LocationFormatId, TutorGender } from "./common";
 
 /** Compétence = Subject (catalogue). */
 export interface TutorSkill {
@@ -40,16 +40,21 @@ export interface TutorApplicationSubmission {
   gender?: TutorGender;
   birthDate?: string;
   experiences: {
-    type: "PROFESSIONAL" | "ACADEMIC";
+    type: "TEACHING" | "SUPERVISION" | "PROFESSIONAL" | "ACADEMIC" | "VOLUNTEER";
     title: string;
     organization: string;
     period: string;
+    /** Catégories de niveaux encadrés : « Primaire », « Collège », « Lycée », « Université ». */
+    audience?: string[];
+    subjectsTaught?: string;
     description?: string;
   }[];
   subjects: { skillId: string; levelIds: string[]; competenceDescription?: string }[];
   offers: {
     subjectId: string;
     educationLevelId: string;
+    /** Série (Première/Terminale, obligatoire) ou mention (université). */
+    trackId?: string;
     title: string;
     description: string;
     format: LocationFormatId;
@@ -57,7 +62,7 @@ export interface TutorApplicationSubmission {
     price: number;
     currency: string;
   }[];
-  locations: { label: string; radiusKm: number; isPrimary: boolean; latitude: number; longitude: number }[];
+  locations: { label: string; kind: InPersonModeId; radiusKm: number; isPrimary: boolean; latitude: number; longitude: number }[];
   weeklyAvailability: {
     dayOfWeek: number;
     slots: { startTime: string; endTime: string; format: LocationFormatId; placeIndex?: number | null }[];

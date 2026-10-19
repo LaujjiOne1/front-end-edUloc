@@ -1,5 +1,5 @@
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import Animated, {
   Extrapolation,
@@ -17,6 +17,11 @@ export const WHEEL_VISIBLE_ITEMS = 5;
 const PADDING = WHEEL_ITEM_HEIGHT * Math.floor(WHEEL_VISIBLE_ITEMS / 2);
 /** Sur le web (pas de snapToInterval) : on recale la roue quand le défilement s'arrête. */
 const SETTLE_DELAY_MS = 140;
+/**
+ * Seules les lignes proches du centre sont montées (une roue d'années en compte ~90, chacune animée) : l'ouverture et
+ * le défilement restent fluides. Des espaceurs gardent la hauteur — et donc la position — du contenu complet.
+ */
+const RENDER_WINDOW = 7;
 
 export type WheelItemData = { key: string | number; label: string };
 
@@ -47,6 +52,8 @@ export function WheelColumn({ items, selectedIndex, onSelect, width, accessibili
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedRef = useRef(selectedIndex);
   const maxIndex = items.length - 1;
+  // Ligne au centre pendant le défilement : pilote la fenêtre de lignes montées.
+  const [center, setCenter] = useState(selectedIndex);
 
   const scrollToIndex = useCallback(
     (index: number, animated: boolean) => {
@@ -81,13 +88,18 @@ export function WheelColumn({ items, selectedIndex, onSelect, width, accessibili
     dragging.current = value;
   }, []);
 
+  const onCrossIndex = useCallback((index: number) => {
+    tick();
+    setCenter(index);
+  }, []);
+
   const handler = useAnimatedScrollHandler({
     onScroll: (event) => {
       scrollY.value = event.contentOffset.y;
       const index = Math.round(event.contentOffset.y / WHEEL_ITEM_HEIGHT);
       if (index !== lastTick.value) {
         lastTick.value = index;
-        runOnJS(tick)();
+        runOnJS(onCrossIndex)(index);
       }
       runOnJS(scheduleSettle)(event.contentOffset.y);
     },
@@ -124,6 +136,16 @@ export function WheelColumn({ items, selectedIndex, onSelect, width, accessibili
     onSelect(index);
     scrollToIndex(index, true);
   };
+  const chooseRef = useRef(choose);
+  chooseRef.current = choose;
+  const press = useCallback((index: number) => {
+    if (!disabledRef.current) chooseRef.current(index);
+  }, []);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+
+  const first = Math.max(0, Math.min(center, maxIndex) - RENDER_WINDOW);
+  const last = Math.min(maxIndex, Math.min(center, maxIndex) + RENDER_WINDOW);
 
   return (
     <View
@@ -151,16 +173,21 @@ export function WheelColumn({ items, selectedIndex, onSelect, width, accessibili
         contentOffset={{ x: 0, y: selectedIndex * WHEEL_ITEM_HEIGHT }}
         contentContainerStyle={{ paddingVertical: PADDING }}
       >
-        {items.map((item, index) => (
-          <WheelItem
-            key={item.key}
-            label={item.label}
-            index={index}
-            scrollY={scrollY}
-            active={index === selectedIndex}
-            onPress={() => !disabled && choose(index)}
-          />
-        ))}
+        <View style={{ height: first * WHEEL_ITEM_HEIGHT }} />
+        {items.slice(first, last + 1).map((item, offset) => {
+          const index = first + offset;
+          return (
+            <WheelItem
+              key={item.key}
+              label={item.label}
+              index={index}
+              scrollY={scrollY}
+              active={index === selectedIndex}
+              onPress={press}
+            />
+          );
+        })}
+        <View style={{ height: (maxIndex - last) * WHEEL_ITEM_HEIGHT }} />
       </Animated.ScrollView>
     </View>
   );
@@ -171,10 +198,10 @@ type WheelItemProps = {
   index: number;
   scrollY: SharedValue<number>;
   active: boolean;
-  onPress: () => void;
+  onPress: (index: number) => void;
 };
 
-function WheelItem({ label, index, scrollY, active, onPress }: WheelItemProps) {
+const WheelItem = memo(function WheelItem({ label, index, scrollY, active, onPress }: WheelItemProps) {
   const style = useAnimatedStyle(() => {
     const offset = (index * WHEEL_ITEM_HEIGHT - scrollY.value) / WHEEL_ITEM_HEIGHT; // 0 = centre
     const distance = Math.abs(offset);
@@ -189,7 +216,7 @@ function WheelItem({ label, index, scrollY, active, onPress }: WheelItemProps) {
   });
 
   return (
-    <Pressable onPress={onPress} accessibilityLabel={label} style={{ height: WHEEL_ITEM_HEIGHT }}>
+    <Pressable onPress={() => onPress(index)} accessibilityLabel={label} style={{ height: WHEEL_ITEM_HEIGHT }}>
       <Animated.View style={[{ height: WHEEL_ITEM_HEIGHT, alignItems: "center", justifyContent: "center" }, style]}>
         <Text
           numberOfLines={1}
@@ -200,4 +227,4 @@ function WheelItem({ label, index, scrollY, active, onPress }: WheelItemProps) {
       </Animated.View>
     </Pressable>
   );
-}
+});

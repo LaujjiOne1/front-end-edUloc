@@ -5,23 +5,15 @@ import { Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
-  ChildIcon,
   EditIcon,
-  FamilyIcon,
   FinanceIcon,
   GraduationCapIcon,
-  HouseIcon,
   type IconProps,
   LanguagesIcon,
   LevelIcon,
-  LocationIcon,
-  MicIcon,
-  PersonIcon,
   ScienceIcon,
   SearchIcon,
   SubjectIcon,
-  TeachIcon,
-  VideoIcon,
   XIcon,
 } from "@/components/icons";
 import { FadeIn } from "@/components/motion/fade-in";
@@ -29,8 +21,8 @@ import { PressableScale } from "@/components/motion/pressable-scale";
 import { AuthHeader } from "@/components/ui/auth-header";
 import { Button } from "@/components/ui/button";
 import { StepProgress } from "@/components/ui/step-progress";
+import { funnelSteps, isFunnelComplete } from "@/lib/search-funnel";
 import { useSearchWizardStore } from "@/store/search-wizard.store";
-import type { LocationFormatId } from "@/types/common";
 
 const RESULTS_ROUTE = "/results" as Href;
 
@@ -41,12 +33,6 @@ const SUBJECT_ICONS: Record<string, ComponentType<IconProps>> = {
   finance: FinanceIcon,
   sciences: ScienceIcon,
   methodology: GraduationCapIcon,
-};
-
-const FORMAT_LABELS: Record<LocationFormatId, { label: string; icon: ComponentType<IconProps> }> = {
-  in_person: { label: "En présentiel (à domicile)", icon: HouseIcon },
-  online: { label: "En ligne (visio)", icon: VideoIcon },
-  both: { label: "En présentiel et en ligne", icon: LocationIcon },
 };
 
 type SummarySection = {
@@ -75,93 +61,47 @@ export function SearchSummaryScreen() {
     }, []),
   );
 
+  // Level info
+  const levelLabel = criteria.level?.label ?? "Non renseigné";
+
   // Subject info
-  const subjectLabel = criteria.subject?.label ?? "Non renseigné";
+  const subjectLabel = criteria.subject?.label ?? "Non renseignée";
   const SubjectIconComponent = criteria.subject?.id ? SUBJECT_ICONS[criteria.subject.id] ?? SubjectIcon : SubjectIcon;
 
-  // Level info
-  const levelLabel = criteria.level?.label ?? "Tous niveaux";
-
-  // Beneficiary info
-  const beneficiaryLabel = criteria.beneficiary?.label ?? "Pour moi-même";
-  const BeneficiaryIconComponent =
-    criteria.beneficiary?.id === "child"
-      ? ChildIcon
-      : criteria.beneficiary?.id === "relative"
-        ? FamilyIcon
-        : PersonIcon;
-
-  // Location & Format info
-  const locationText = criteria.location.useCurrentPosition
-    ? "Ma position actuelle"
-    : criteria.location.query.trim() || "Tous secteurs";
-  const formatInfo = FORMAT_LABELS[criteria.location.format] ?? FORMAT_LABELS.in_person;
-  const FormatIconComponent = formatInfo.icon;
-
-  // Objective info
-  const objectiveLabel = criteria.objective?.label ?? "Soutien régulier";
-
-  // Detail info
-  const detailNote = criteria.detail.note.trim()
-    ? criteria.detail.note
-    : "Aucune précision particulière";
+  const trackKind = criteria.level?.trackKind ?? null;
+  const isComplete = isFunnelComplete(criteria);
 
   const sections: SummarySection[] = [
     {
-      id: "subject",
-      title: "Matière recherchée",
-      value: subjectLabel,
-      route: "/search?from=summary" as Href,
-      icon: SubjectIconComponent,
-      iconBg: "bg-primary-tint",
-      iconColor: "#332E86",
-    },
-    {
       id: "level",
-      title: "Niveau scolaire",
+      title: "Niveau d’études",
       value: levelLabel,
-      route: "/search/level?from=summary" as Href,
+      route: "/search?from=summary" as Href,
       icon: LevelIcon,
       iconBg: "bg-accent-tint",
       iconColor: "#0E9C82",
     },
+    ...(trackKind
+      ? [
+          {
+            id: "track",
+            title: trackKind === "serie" ? "Série" : "Mention",
+            value: criteria.track?.label ?? "Non renseignée",
+            route: "/search/track?from=summary" as Href,
+            icon: GraduationCapIcon,
+            iconBg: "bg-violet-tint",
+            iconColor: "#5848C2",
+          },
+        ]
+      : []),
     {
-      id: "for-whom",
-      title: "Bénéficiaire",
-      value: beneficiaryLabel,
-      subtitle: criteria.beneficiary?.description ?? undefined,
-      route: "/search/for-whom?from=summary" as Href,
-      icon: BeneficiaryIconComponent,
-      iconBg: "bg-violet-tint",
-      iconColor: "#5848C2",
-    },
-    {
-      id: "location",
-      title: "Lieu & Format du cours",
-      value: locationText,
-      subtitle: formatInfo.label,
-      route: "/search/location?from=summary" as Href,
-      icon: FormatIconComponent,
+      id: "subject",
+      title: "Matière recherchée",
+      value: subjectLabel,
+      route: "/search/subject?from=summary" as Href,
+      icon: SubjectIconComponent,
       iconBg: "bg-primary-tint",
       iconColor: "#332E86",
-    },
-    {
-      id: "objective",
-      title: "Objectif pédagogique",
-      value: objectiveLabel,
-      route: "/search/objective?from=summary" as Href,
-      icon: TeachIcon,
-      iconBg: "bg-accent-tint",
-      iconColor: "#0E9C82",
-    },
-    {
-      id: "detail",
-      title: "Précisions & Détails",
-      value: detailNote,
-      route: "/search/detail?from=summary" as Href,
-      icon: MicIcon,
-      iconBg: "bg-surface-tint",
-      iconColor: "#606482",
     },
   ];
 
@@ -173,7 +113,7 @@ export function SearchSummaryScreen() {
   };
 
   const handleLaunchSearch = () => {
-    if (isNavigating) return;
+    if (isNavigating || !isComplete) return;
     setIsNavigating(true);
     router.push(RESULTS_ROUTE);
   };
@@ -186,7 +126,7 @@ export function SearchSummaryScreen() {
   return (
     <View className="flex-1 bg-paper" style={{ paddingTop: insets.top }}>
       <AuthHeader onBack={() => router.back()} />
-      <StepProgress step={7} total={7} />
+      <StepProgress step={funnelSteps(criteria.level).summary} total={funnelSteps(criteria.level).total} />
 
       <ScrollView
         className="flex-1"
@@ -196,7 +136,7 @@ export function SearchSummaryScreen() {
         <FadeIn delay={40}>
           <Text className="mb-1 text-[26px] font-bold text-ink">Récapitulatif de votre recherche</Text>
           <Text className="mb-5 text-[14px] text-ink-soft">
-            Vérifiez attentivement vos critères ou modifiez-les avant de découvrir les tuteurs disponibles.
+            Vérifiez vos critères avant de découvrir les tuteurs disponibles. Vous préciserez pour qui, l’objectif et votre besoin au moment de réserver.
           </Text>
         </FadeIn>
 
@@ -288,7 +228,7 @@ export function SearchSummaryScreen() {
         <Button
           label="Lancer la recherche"
           icon={<SearchIcon size={17} color="#fff" />}
-          disabled={isNavigating}
+          disabled={isNavigating || !isComplete}
           onPress={handleLaunchSearch}
         />
 

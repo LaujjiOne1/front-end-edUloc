@@ -11,26 +11,29 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import {
-  BriefcaseIcon,
-  CheckIcon,
-  GraduationCapIcon,
-  PencilIcon,
-  PlusIcon,
-  TrashIcon,
-  XIcon,
-} from "@/components/icons";
+import { BriefcaseIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon, XIcon } from "@/components/icons";
 import { FadeIn } from "@/components/motion/fade-in";
 import { PressableScale } from "@/components/motion/pressable-scale";
 import { AuthHeader } from "@/components/ui/auth-header";
 import { Button } from "@/components/ui/button";
+import { Chip } from "@/components/ui/chip";
+import { InlineWarning } from "@/components/ui/inline-warning";
+import { FieldCombobox } from "@/components/ui/field-combobox";
 import { SelectField } from "@/components/ui/select-field";
 import { StepProgress } from "@/components/ui/step-progress";
+import { useTracks } from "@/hooks/use-tracks";
 import { TextField } from "@/components/ui/text-field";
+import { experienceWarnings } from "@/lib/experience-warnings";
+import {
+  EXPERIENCE_AUDIENCES,
+  EXPERIENCE_TYPES,
+  type ExperienceAudienceId,
+  type TutorExperienceType,
+  experienceTypeLabel,
+} from "@/lib/experience-types";
 import {
   type EducationDegree,
   type TutorExperienceEntry,
-  type TutorExperienceType,
   useTutorApplicationStore,
 } from "@/store/tutor-application.store";
 
@@ -45,45 +48,58 @@ const DEGREE_OPTIONS: EducationDegree[] = [
   { id: "other", label: "Autre" },
 ];
 
+const DEFAULT_TYPE: TutorExperienceType = "enseignement";
+
 export function TutorBackgroundScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const background = useTutorApplicationStore((s) => s.background);
+  const cvApplied = useTutorApplicationStore((s) => s.cvApplied);
   const setBackground = useTutorApplicationStore((s) => s.setBackground);
   const addExperience = useTutorApplicationStore((s) => s.addExperience);
   const updateExperience = useTutorApplicationStore((s) => s.updateExperience);
   const removeExperience = useTutorApplicationStore((s) => s.removeExperience);
 
+  // Domaine : il dépend du niveau d'études. Un bachelier se voit proposer les séries du bac, un titulaire d'un diplôme
+  // universitaire les mentions ; « Autre » : aucune suggestion. La saisie libre reste toujours possible.
+  const degreeId = background.degree?.id ?? null;
+  const fieldKind = degreeId === "bac" ? "serie" : degreeId && degreeId !== "other" ? "mention" : null;
+  const { state: fieldOptionsState, retry: retryFieldOptions } = useTracks(fieldKind, fieldKind === "serie" ? "Terminale" : undefined);
+  // Les séries de Première et de Terminale portent les mêmes noms : on ne propose que celles de la Terminale.
+  const fieldSuggestions =
+    fieldKind && fieldOptionsState.status === "success" ? fieldOptionsState.tracks.map((t) => t.label) : [];
+  const fieldLoadError = fieldKind && fieldOptionsState.status === "error" ? fieldOptionsState.message : null;
+
   const experiences = useMemo(() => background.experiences ?? [], [background.experiences]);
+  const teachingCount = experiences.filter((e) => EXPERIENCE_TYPES.find((t) => t.id === e.type)?.teaching).length;
 
-  const proExperiences = useMemo(
-    () => experiences.filter((e) => e.type === "professionnelle"),
-    [experiences]
-  );
-  const academicExperiences = useMemo(
-    () => experiences.filter((e) => e.type === "academique"),
-    [experiences]
-  );
-
-  // Form State (Modal)
+  // Form State (Modal) — un seul formulaire, le type se coche en tête.
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [formType, setFormType] = useState<TutorExperienceType>("professionnelle");
+  const [formType, setFormType] = useState<TutorExperienceType>(DEFAULT_TYPE);
   const [formTitle, setFormTitle] = useState("");
   const [formOrganization, setFormOrganization] = useState("");
   const [formPeriod, setFormPeriod] = useState("");
+  const [formAudience, setFormAudience] = useState<ExperienceAudienceId[]>([]);
+  const [formSubjects, setFormSubjects] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [formError, setFormError] = useState("");
   const [successToast, setSuccessToast] = useState("");
 
-  const handleStartAdd = (defaultType: TutorExperienceType = "professionnelle") => {
-    setEditingId(null);
-    setFormType(defaultType);
+  const resetFields = () => {
     setFormTitle("");
     setFormOrganization("");
     setFormPeriod("");
+    setFormAudience([]);
+    setFormSubjects("");
     setFormDescription("");
     setFormError("");
+  };
+
+  const handleStartAdd = () => {
+    setEditingId(null);
+    setFormType(DEFAULT_TYPE);
+    resetFields();
     setSuccessToast("");
     setIsFormOpen(true);
   };
@@ -94,6 +110,8 @@ export function TutorBackgroundScreen() {
     setFormTitle(exp.title);
     setFormOrganization(exp.organization);
     setFormPeriod(exp.period);
+    setFormAudience(exp.audience ?? []);
+    setFormSubjects(exp.subjects ?? "");
     setFormDescription(exp.description ?? "");
     setFormError("");
     setSuccessToast("");
@@ -107,17 +125,16 @@ export function TutorBackgroundScreen() {
     setSuccessToast("");
   };
 
+  const toggleAudience = (id: ExperienceAudienceId) =>
+    setFormAudience((current) => (current.includes(id) ? current.filter((a) => a !== id) : [...current, id]));
+
   const handleSaveExperience = (addAnother = false) => {
     if (!formTitle.trim()) {
-      setFormError("Veuillez renseigner l'intitulé de l'expérience.");
+      setFormError("Veuillez renseigner l'intitulé du poste, du projet ou de la mission.");
       return;
     }
     if (!formOrganization.trim()) {
-      setFormError(
-        formType === "professionnelle"
-          ? "Veuillez renseigner l'entreprise ou la structure."
-          : "Veuillez renseigner l'établissement ou l'université."
-      );
+      setFormError("Veuillez renseigner l'établissement, l'entreprise ou la structure.");
       return;
     }
     if (!formPeriod.trim()) {
@@ -125,44 +142,35 @@ export function TutorBackgroundScreen() {
       return;
     }
 
+    const entry = {
+      type: formType,
+      title: formTitle.trim(),
+      organization: formOrganization.trim(),
+      period: formPeriod.trim(),
+      audience: formAudience,
+      subjects: formSubjects.trim() || undefined,
+      description: formDescription.trim() || undefined,
+      // Relue et enregistrée par le tuteur : les avertissements de l'import ne valent plus.
+      fromCv: false,
+      warnings: [] as string[],
+    };
+
     if (editingId) {
-      updateExperience(editingId, {
-        type: formType,
-        title: formTitle.trim(),
-        organization: formOrganization.trim(),
-        period: formPeriod.trim(),
-        description: formDescription.trim() || undefined,
-      });
+      updateExperience(editingId, entry);
       setIsFormOpen(false);
       setEditingId(null);
-    } else {
-      addExperience({
-        type: formType,
-        title: formTitle.trim(),
-        organization: formOrganization.trim(),
-        period: formPeriod.trim(),
-        description: formDescription.trim() || undefined,
-      });
-
-      if (addAnother) {
-        setSuccessToast(`Expérience "${formTitle.trim()}" ajoutée !`);
-        setFormTitle("");
-        setFormOrganization("");
-        setFormPeriod("");
-        setFormDescription("");
-        setFormError("");
-        return;
-      }
-
-      setIsFormOpen(false);
+      resetFields();
+      return;
     }
 
-    setEditingId(null);
-    setFormTitle("");
-    setFormOrganization("");
-    setFormPeriod("");
-    setFormDescription("");
-    setFormError("");
+    addExperience(entry);
+    if (addAnother) {
+      setSuccessToast(`Expérience "${entry.title}" ajoutée !`);
+      resetFields();
+      return;
+    }
+    setIsFormOpen(false);
+    resetFields();
     setSuccessToast("");
   };
 
@@ -189,7 +197,7 @@ export function TutorBackgroundScreen() {
         <FadeIn delay={40}>
           <Text className="mb-1 text-[24px] font-bold text-ink">Quel est votre parcours&nbsp;?</Text>
           <Text className="mb-6 text-[13.5px] text-ink-soft">
-            Renseignez votre formation académique et vos différentes expériences professionnelles et universitaires.
+            Renseignez votre formation, puis vos expériences : enseignement, encadrement, travail, projets, bénévolat.
           </Text>
         </FadeIn>
 
@@ -206,53 +214,65 @@ export function TutorBackgroundScreen() {
               options={DEGREE_OPTIONS}
               onSelect={(option) => {
                 const degree = DEGREE_OPTIONS.find((d) => d.id === option.id) ?? null;
-                setBackground({ degree });
+                // Série et mention ne se remplacent pas : changer de niveau d'études efface le domaine choisi.
+                setBackground({ degree, field: degree?.id === background.degree?.id ? background.field : "" });
               }}
             />
-            <TextField
-              label="Domaine"
-              value={background.field}
-              onChangeText={(field) => setBackground({ field })}
-              placeholder="Ex : Informatique, Mathématiques, Lettres..."
-            />
+            {cvApplied && !background.degree ? (
+              <InlineWarning message="Niveau d'études non trouvé dans votre CV : choisissez-le pour continuer." spaced />
+            ) : null}
             <TextField
               label="Établissement"
               value={background.institution}
               onChangeText={(institution) => setBackground({ institution })}
               placeholder="Ex : Université de Paris, École Centrale..."
             />
+            {cvApplied && !background.institution.trim() ? (
+              <InlineWarning message="Établissement non trouvé dans votre CV : renseignez-le." spaced />
+            ) : null}
+            {fieldKind === "serie" ? (
+              // Bachelier : il choisit sa série, sans saisie libre.
+              <>
+                <SelectField
+                  label="Domaine (série du bac)"
+                  value={fieldSuggestions.includes(background.field) ? { id: background.field, label: background.field } : null}
+                  options={fieldSuggestions.map((label) => ({ id: label, label }))}
+                  placeholder={fieldOptionsState.status === "loading" ? "Chargement..." : "Sélectionner votre série"}
+                  disabled={fieldSuggestions.length === 0}
+                  onSelect={(option) => setBackground({ field: option.label })}
+                />
+                {fieldLoadError ? (
+                  <View className="-mt-2 mb-[14px] flex-row items-center gap-3">
+                    <Text className="flex-1 text-[12.5px] text-error">{fieldLoadError}</Text>
+                    <PressableScale onPress={retryFieldOptions} accessibilityLabel="Réessayer de charger les séries">
+                      <Text className="text-[12.5px] font-semibold text-primary">Réessayer</Text>
+                    </PressableScale>
+                  </View>
+                ) : null}
+              </>
+            ) : (
+              // Diplôme universitaire : mentions suggérées, saisie libre possible si aucune ne convient.
+              <FieldCombobox
+                label="Domaine"
+                value={background.field}
+                onChange={(field) => setBackground({ field })}
+                suggestions={fieldSuggestions}
+                suggestionsTitle="Mentions"
+                isLoading={!!fieldKind && fieldOptionsState.status === "loading"}
+                loadError={fieldLoadError}
+                onRetry={retryFieldOptions}
+                disabled={!degreeId}
+                placeholder={fieldKind === "mention" ? "Tapez votre mention ou votre domaine…" : "Tapez votre domaine…"}
+              />
+            )}
+            {cvApplied && !!degreeId && !background.field.trim() ? (
+              <InlineWarning message="Domaine non trouvé dans votre CV : choisissez-le ou saisissez-le." />
+            ) : null}
           </View>
         </FadeIn>
 
-        {/* Global Experiences Summary Counter */}
-        <FadeIn delay={110}>
-          <View className="mb-6 flex-row items-center justify-between rounded-xl bg-primary-tint/30 px-3.5 py-2.5 border border-primary/15">
-            <View className="flex-row items-center gap-2">
-              <View className="h-7 w-7 items-center justify-center rounded-full bg-primary-tint">
-                <BriefcaseIcon size={14} color="#332E86" />
-              </View>
-              <Text className="text-[13px] font-bold text-ink">
-                Expériences enregistrées :{" "}
-                <Text className="text-primary font-extrabold">{experiences.length}</Text>
-              </Text>
-            </View>
-            <View className="flex-row items-center gap-1.5">
-              <View className="rounded-full bg-white px-2.5 py-0.5 border border-line">
-                <Text className="text-[11.5px] font-bold text-primary">
-                  {proExperiences.length} pro
-                </Text>
-              </View>
-              <View className="rounded-full bg-white px-2.5 py-0.5 border border-line">
-                <Text className="text-[11.5px] font-bold text-[#6D5BD0]">
-                  {academicExperiences.length} acad.
-                </Text>
-              </View>
-            </View>
-          </View>
-        </FadeIn>
-
-        {/* Section 2: Expériences Professionnelles */}
-        <FadeIn delay={130}>
+        {/* Section 2: Expériences (un seul formulaire, le type se coche) */}
+        <FadeIn delay={120}>
           <View className="mb-6 rounded-2xl border border-line bg-surface p-4 shadow-xs">
             <View className="mb-3 flex-row items-center justify-between">
               <View className="flex-row items-center gap-2">
@@ -260,171 +280,52 @@ export function TutorBackgroundScreen() {
                   <BriefcaseIcon size={14} color="#332E86" />
                 </View>
                 <View>
-                  <Text className="text-[15px] font-bold text-ink">
-                    2. Expériences professionnelles
-                  </Text>
+                  <Text className="text-[15px] font-bold text-ink">2. Expériences</Text>
                   <Text className="text-[12px] text-ink-soft">
-                    Cours dispensés, stages, postes en entreprise, freelance...
+                    Soutien scolaire, encadrement, emplois, projets, bénévolat...
                   </Text>
                 </View>
               </View>
-              <View className="rounded-full bg-primary-tint px-2.5 py-0.5 border border-primary/20">
-                <Text className="text-[11.5px] font-bold text-primary">
-                  {proExperiences.length}
-                </Text>
+              <View className="rounded-full border border-primary/20 bg-primary-tint px-2.5 py-0.5">
+                <Text className="text-[11.5px] font-bold text-primary">{experiences.length}</Text>
               </View>
             </View>
 
-            {/* List of Professional Experiences */}
-            {proExperiences.length > 0 ? (
-              <View className="gap-2.5 mb-3">
-                {proExperiences.map((exp) => (
-                  <View
-                    key={exp.id}
-                    className="rounded-xl border border-line bg-paper p-3.5 shadow-2xs"
-                  >
-                    <View className="flex-row items-start justify-between">
-                      <View className="flex-1 pr-2">
-                        <Text className="text-[14.5px] font-bold text-ink">{exp.title}</Text>
-                        <Text className="text-[12.5px] font-medium text-ink-soft mt-0.5">
-                          {exp.organization} •{" "}
-                          <Text className="text-primary font-bold">{exp.period}</Text>
-                        </Text>
-                        {exp.description ? (
-                          <Text className="mt-1.5 text-[12px] text-ink-soft leading-[17px]">
-                            {exp.description}
-                          </Text>
-                        ) : null}
-                      </View>
-
-                      {/* Edit & Delete actions */}
-                      <View className="flex-row items-center gap-1.5">
-                        <PressableScale
-                          onPress={() => handleStartEdit(exp)}
-                          accessibilityLabel={`Modifier ${exp.title}`}
-                          className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface hover:bg-paper active:scale-95"
-                        >
-                          <PencilIcon size={13} color="#332E86" />
-                        </PressableScale>
-                        <PressableScale
-                          onPress={() => removeExperience(exp.id)}
-                          accessibilityLabel={`Supprimer ${exp.title}`}
-                          className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface hover:bg-error-tint/40 active:scale-95"
-                        >
-                          <TrashIcon size={13} color="#AC4A40" />
-                        </PressableScale>
-                      </View>
-                    </View>
-                  </View>
-                ))}
-              </View>
+            {experiences.length > 0 ? (
+              <>
+                {teachingCount > 0 ? (
+                  <Text className="mb-2.5 text-[12px] font-semibold text-accent">
+                    {teachingCount} liée{teachingCount > 1 ? "s" : ""} à l&apos;enseignement — un atout pour être
+                    trouvé par les élèves.
+                  </Text>
+                ) : null}
+                <View className="mb-3 gap-2.5">
+                  {experiences.map((exp) => (
+                    <ExperienceCard
+                      key={exp.id}
+                      exp={exp}
+                      onEdit={() => handleStartEdit(exp)}
+                      onRemove={() => removeExperience(exp.id)}
+                    />
+                  ))}
+                </View>
+              </>
             ) : (
-              <View className="mb-3 rounded-xl border border-dashed border-line p-3.5 text-center items-center justify-center bg-paper/50">
-                <Text className="text-[12.5px] text-ink-soft text-center">
-                  Aucune expérience professionnelle ajoutée pour le moment.
+              <View className="mb-3 items-center justify-center rounded-xl border border-dashed border-line bg-paper/50 p-3.5">
+                <Text className="text-center text-[12.5px] text-ink-soft">
+                  Aucune expérience ajoutée pour le moment. Une expérience de soutien scolaire ou d&apos;enseignement
+                  compte beaucoup pour les élèves.
                 </Text>
               </View>
             )}
 
-            {/* Add Button for Pro Experience */}
             <PressableScale
-              onPress={() => handleStartAdd("professionnelle")}
-              accessibilityLabel="Ajouter une expérience professionnelle"
-              className="flex-row items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary-tint/30 py-3 px-3 active:scale-98 hover:bg-primary-tint/50 transition-all"
+              onPress={handleStartAdd}
+              accessibilityLabel="Ajouter une expérience"
+              className="flex-row items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary-tint/30 px-3 py-3"
             >
               <PlusIcon size={15} color="#332E86" />
-              <Text className="text-[13px] font-bold text-primary">
-                + Ajouter une expérience professionnelle
-              </Text>
-            </PressableScale>
-          </View>
-        </FadeIn>
-
-        {/* Section 3: Expériences Académiques */}
-        <FadeIn delay={150}>
-          <View className="mb-6 rounded-2xl border border-line bg-surface p-4 shadow-xs">
-            <View className="mb-3 flex-row items-center justify-between">
-              <View className="flex-row items-center gap-2">
-                <View className="h-7 w-7 items-center justify-center rounded-full bg-[#f3f0fc]">
-                  <GraduationCapIcon size={14} color="#6D5BD0" />
-                </View>
-                <View>
-                  <Text className="text-[15px] font-bold text-ink">
-                    3. Expériences académiques
-                  </Text>
-                  <Text className="text-[12px] text-ink-soft">
-                    Projets de recherche, monitorat, concours, publications, distinctions...
-                  </Text>
-                </View>
-              </View>
-              <View className="rounded-full bg-[#f3f0fc] px-2.5 py-0.5 border border-[#6D5BD0]/20">
-                <Text className="text-[11.5px] font-bold text-[#6D5BD0]">
-                  {academicExperiences.length}
-                </Text>
-              </View>
-            </View>
-
-            {/* List of Academic Experiences */}
-            {academicExperiences.length > 0 ? (
-              <View className="gap-2.5 mb-3">
-                {academicExperiences.map((exp) => (
-                  <View
-                    key={exp.id}
-                    className="rounded-xl border border-line bg-paper p-3.5 shadow-2xs"
-                  >
-                    <View className="flex-row items-start justify-between">
-                      <View className="flex-1 pr-2">
-                        <Text className="text-[14.5px] font-bold text-ink">{exp.title}</Text>
-                        <Text className="text-[12.5px] font-medium text-ink-soft mt-0.5">
-                          {exp.organization} •{" "}
-                          <Text className="text-[#6D5BD0] font-bold">{exp.period}</Text>
-                        </Text>
-                        {exp.description ? (
-                          <Text className="mt-1.5 text-[12px] text-ink-soft leading-[17px]">
-                            {exp.description}
-                          </Text>
-                        ) : null}
-                      </View>
-
-                      {/* Edit & Delete actions */}
-                      <View className="flex-row items-center gap-1.5">
-                        <PressableScale
-                          onPress={() => handleStartEdit(exp)}
-                          accessibilityLabel={`Modifier ${exp.title}`}
-                          className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface hover:bg-paper active:scale-95"
-                        >
-                          <PencilIcon size={13} color="#6D5BD0" />
-                        </PressableScale>
-                        <PressableScale
-                          onPress={() => removeExperience(exp.id)}
-                          accessibilityLabel={`Supprimer ${exp.title}`}
-                          className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface hover:bg-error-tint/40 active:scale-95"
-                        >
-                          <TrashIcon size={13} color="#AC4A40" />
-                        </PressableScale>
-                      </View>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ) : (
-              <View className="mb-3 rounded-xl border border-dashed border-line p-3.5 text-center items-center justify-center bg-paper/50">
-                <Text className="text-[12.5px] text-ink-soft text-center">
-                  Aucune expérience académique ajoutée pour le moment.
-                </Text>
-              </View>
-            )}
-
-            {/* Add Button for Academic Experience */}
-            <PressableScale
-              onPress={() => handleStartAdd("academique")}
-              accessibilityLabel="Ajouter une expérience académique"
-              className="flex-row items-center justify-center gap-2 rounded-xl border border-[#6D5BD0]/30 bg-[#f3f0fc]/60 py-3 px-3 active:scale-98 hover:bg-[#f3f0fc] transition-all"
-            >
-              <PlusIcon size={15} color="#6D5BD0" />
-              <Text className="text-[13px] font-bold text-[#6D5BD0]">
-                + Ajouter une expérience académique
-              </Text>
+              <Text className="text-[13px] font-bold text-primary">Ajouter une expérience</Text>
             </PressableScale>
           </View>
         </FadeIn>
@@ -443,12 +344,7 @@ export function TutorBackgroundScreen() {
       </View>
 
       {/* MODALE D'AJOUT ET MODIFICATION D'EXPÉRIENCE */}
-      <Modal
-        visible={isFormOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={handleCancelForm}
-      >
+      <Modal visible={isFormOpen} transparent animationType="slide" onRequestClose={handleCancelForm}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           className="flex-1 justify-end bg-black/55"
@@ -457,147 +353,70 @@ export function TutorBackgroundScreen() {
             className="max-h-[92%] rounded-t-[28px] border-t border-line bg-surface p-5 shadow-2xl"
             style={{ paddingBottom: Math.max(insets.bottom, 22) }}
           >
-            {/* Modal Header */}
             <View className="mb-4 flex-row items-center justify-between border-b border-line-soft pb-3">
-              <View className="flex-row items-center gap-2.5">
-                <View
-                  className={[
-                    "h-9 w-9 items-center justify-center rounded-xl",
-                    formType === "professionnelle" ? "bg-primary-tint" : "bg-[#f3f0fc]",
-                  ].join(" ")}
-                >
-                  {formType === "professionnelle" ? (
-                    <BriefcaseIcon size={17} color="#332E86" />
-                  ) : (
-                    <GraduationCapIcon size={17} color="#6D5BD0" />
-                  )}
-                </View>
-                <View>
-                  <Text className="text-[17px] font-bold text-ink">
-                    {editingId ? "Modifier l'expérience" : "Ajouter une expérience"}
-                  </Text>
-                  <Text className="text-[12px] text-ink-soft">
-                    {editingId
-                      ? "Mettez à jour les informations enregistrées."
-                      : "Complétez les détails de votre expérience."}
-                  </Text>
-                </View>
+              <View>
+                <Text className="text-[17px] font-bold text-ink">
+                  {editingId ? "Modifier l'expérience" : "Ajouter une expérience"}
+                </Text>
+                <Text className="text-[12px] text-ink-soft">
+                  {editingId
+                    ? "Mettez à jour les informations enregistrées."
+                    : "Choisissez le type, puis complétez les détails."}
+                </Text>
               </View>
-
               <PressableScale
                 onPress={handleCancelForm}
                 accessibilityLabel="Fermer la modale"
-                className="h-8 w-8 items-center justify-center rounded-full bg-paper border border-line active:scale-95"
+                className="h-8 w-8 items-center justify-center rounded-full border border-line bg-paper"
               >
                 <XIcon size={15} color="#585B78" />
               </PressableScale>
             </View>
 
-            {/* Modal Body */}
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              className="pr-0.5"
-            >
-              {/* Toast message if chaining */}
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               {successToast ? (
-                <View className="mb-3.5 flex-row items-center gap-2 rounded-xl bg-accent-tint/60 border border-accent/30 p-2.5">
+                <View className="mb-3.5 flex-row items-center gap-2 rounded-xl border border-accent/30 bg-accent-tint/60 p-2.5">
                   <CheckIcon size={14} color="#0E9C82" />
                   <Text className="text-[12.5px] font-bold text-accent">{successToast}</Text>
                 </View>
               ) : null}
 
-              {/* Type Switcher */}
               <Text className="mb-2 text-[13px] font-semibold text-ink">
                 Type d&apos;expérience <Text className="text-error">*</Text>
               </Text>
-              <View className="flex-row gap-2 mb-4">
-                <PressableScale
-                  onPress={() => setFormType("professionnelle")}
-                  className={[
-                    "flex-1 flex-row items-center justify-center gap-2 rounded-xl py-2.5 px-3 border transition-all",
-                    formType === "professionnelle"
-                      ? "bg-primary border-primary"
-                      : "bg-surface border-line hover:bg-paper",
-                  ].join(" ")}
-                >
-                  <BriefcaseIcon
-                    size={15}
-                    color={formType === "professionnelle" ? "#ffffff" : "#585B78"}
+              <View className="mb-4 flex-row flex-wrap gap-2">
+                {EXPERIENCE_TYPES.map((type) => (
+                  <Chip
+                    key={type.id}
+                    label={type.label}
+                    active={formType === type.id}
+                    onPress={() => setFormType(type.id)}
                   />
-                  <Text
-                    className={[
-                      "text-[13px] font-bold",
-                      formType === "professionnelle" ? "text-white" : "text-ink-soft",
-                    ].join(" ")}
-                  >
-                    Professionnelle
-                  </Text>
-                </PressableScale>
-
-                <PressableScale
-                  onPress={() => setFormType("academique")}
-                  className={[
-                    "flex-1 flex-row items-center justify-center gap-2 rounded-xl py-2.5 px-3 border transition-all",
-                    formType === "academique"
-                      ? "bg-[#6D5BD0] border-[#6D5BD0]"
-                      : "bg-surface border-line hover:bg-paper",
-                  ].join(" ")}
-                >
-                  <GraduationCapIcon
-                    size={15}
-                    color={formType === "academique" ? "#ffffff" : "#585B78"}
-                  />
-                  <Text
-                    className={[
-                      "text-[13px] font-bold",
-                      formType === "academique" ? "text-white" : "text-ink-soft",
-                    ].join(" ")}
-                  >
-                    Académique
-                  </Text>
-                </PressableScale>
+                ))}
               </View>
 
-              {/* Form Fields */}
               <TextField
-                label={
-                  formType === "professionnelle"
-                    ? "Intitulé du poste / Rôle *"
-                    : "Intitulé du projet / Rôle / Formation *"
-                }
+                label="Intitulé du poste, projet ou mission *"
                 value={formTitle}
                 onChangeText={(val) => {
                   setFormTitle(val);
                   if (formError) setFormError("");
                 }}
-                placeholder={
-                  formType === "professionnelle"
-                    ? "Ex : Enseignant particulier, Développeur..."
-                    : "Ex : Projet de recherche en IA, Monitorat..."
-                }
+                placeholder="Ex : Répétiteur de mathématiques, Monitorat, Développeur..."
               />
 
               <TextField
-                label={
-                  formType === "professionnelle"
-                    ? "Entreprise / Établissement / Organisme *"
-                    : "Université / Laboratoire / Établissement *"
-                }
+                label="Établissement / entreprise / structure *"
                 value={formOrganization}
                 onChangeText={(val) => {
                   setFormOrganization(val);
                   if (formError) setFormError("");
                 }}
-                placeholder={
-                  formType === "professionnelle"
-                    ? "Ex : Freelance, Acadomia, Cabinet..."
-                    : "Ex : Université Paris-Saclay, CNRS..."
-                }
+                placeholder="Ex : Lycée Andohalo, Freelance, Université d'Antananarivo..."
               />
 
               <TextField
-                label="Période ou Durée *"
+                label="Période ou durée *"
                 value={formPeriod}
                 onChangeText={(val) => {
                   setFormPeriod(val);
@@ -606,16 +425,34 @@ export function TutorBackgroundScreen() {
                 placeholder="Ex : 2022 — 2024, 2 ans, En cours"
               />
 
-              {/* Description field */}
+              <Text className="mb-2 text-[13px] font-semibold text-ink">Niveau ou public encadré</Text>
+              <View className="mb-4 flex-row flex-wrap gap-2">
+                {EXPERIENCE_AUDIENCES.map((audience) => (
+                  <Chip
+                    key={audience.id}
+                    label={audience.label}
+                    active={formAudience.includes(audience.id)}
+                    onPress={() => toggleAudience(audience.id)}
+                  />
+                ))}
+              </View>
+
+              <TextField
+                label="Matières ou compétences enseignées"
+                value={formSubjects}
+                onChangeText={setFormSubjects}
+                placeholder="Ex : Mathématiques, Physique, méthodologie..."
+              />
+
               <View className="mb-4">
                 <Text className="mb-1.5 ml-0.5 text-[13px] font-semibold text-ink">
-                  Missions, réalisations ou compétences (optionnel)
+                  Responsabilités et résultats (optionnel)
                 </Text>
-                <View className="rounded-xl border border-line bg-paper p-3 focus:border-primary">
+                <View className="rounded-xl border border-line bg-paper p-3">
                   <TextInput
                     value={formDescription}
                     onChangeText={setFormDescription}
-                    placeholder="Détaillez brièvement vos responsabilités ou accomplissements..."
+                    placeholder="Détaillez brièvement vos responsabilités ou vos résultats..."
                     placeholderTextColor="#9799AF"
                     multiline
                     numberOfLines={3}
@@ -625,46 +462,37 @@ export function TutorBackgroundScreen() {
                 </View>
               </View>
 
-              {/* Error Banner */}
               {formError ? (
-                <View className="mb-4 rounded-xl bg-error-tint/60 border border-error/30 p-2.5">
-                  <Text className="text-[12.5px] font-semibold text-error text-center">
-                    {formError}
-                  </Text>
+                <View className="mb-4 rounded-xl border border-error/30 bg-error-tint/60 p-2.5">
+                  <Text className="text-center text-[12.5px] font-semibold text-error">{formError}</Text>
                 </View>
               ) : null}
 
-              {/* Modal Actions */}
-              <View className="gap-2.5 pt-2 mb-2">
+              <View className="mb-2 gap-2.5 pt-2">
                 <View className="flex-row items-center gap-2">
                   <PressableScale
                     onPress={handleCancelForm}
-                    className="flex-1 items-center justify-center rounded-xl border border-line bg-paper py-3.5 active:scale-98"
+                    className="flex-1 items-center justify-center rounded-xl border border-line bg-paper py-3.5"
                   >
                     <Text className="text-[14px] font-bold text-ink-soft">Annuler</Text>
                   </PressableScale>
 
                   <PressableScale
                     onPress={() => handleSaveExperience(false)}
-                    className="flex-1 flex-row items-center justify-center gap-1.5 rounded-xl bg-primary py-3.5 px-3 shadow-sm active:scale-98"
+                    className="flex-1 flex-row items-center justify-center gap-1.5 rounded-xl bg-primary px-3 py-3.5 shadow-sm"
                   >
                     <CheckIcon size={14} color="#ffffff" />
-                    <Text className="text-[14px] font-bold text-white">
-                      {editingId ? "Enregistrer" : "Valider"}
-                    </Text>
+                    <Text className="text-[14px] font-bold text-white">{editingId ? "Enregistrer" : "Valider"}</Text>
                   </PressableScale>
                 </View>
 
-                {/* Chaining button: Save and add another experience */}
                 {!editingId && (
                   <PressableScale
                     onPress={() => handleSaveExperience(true)}
-                    className="flex-row items-center justify-center gap-1.5 rounded-xl border border-primary/40 bg-primary-tint/50 py-3 active:scale-98"
+                    className="flex-row items-center justify-center gap-1.5 rounded-xl border border-primary/40 bg-primary-tint/50 py-3"
                   >
                     <PlusIcon size={14} color="#332E86" />
-                    <Text className="text-[13.5px] font-bold text-primary">
-                      Valider et ajouter une autre expérience
-                    </Text>
+                    <Text className="text-[13.5px] font-bold text-primary">Valider et ajouter une autre expérience</Text>
                   </PressableScale>
                 )}
               </View>
@@ -673,5 +501,62 @@ export function TutorBackgroundScreen() {
         </KeyboardAvoidingView>
       </Modal>
     </KeyboardAvoidingView>
+  );
+}
+
+function ExperienceCard({
+  exp,
+  onEdit,
+  onRemove,
+}: {
+  exp: TutorExperienceEntry;
+  onEdit: () => void;
+  onRemove: () => void;
+}) {
+  const audience = (exp.audience ?? [])
+    .map((id) => EXPERIENCE_AUDIENCES.find((a) => a.id === id)?.label)
+    .filter(Boolean)
+    .join(", ");
+
+  return (
+    <View className="rounded-xl border border-line bg-paper p-3.5">
+      <View className="flex-row items-start justify-between">
+        <View className="flex-1 pr-2">
+          <View className="mb-1.5 self-start rounded-full bg-primary-tint px-2.5 py-0.5">
+            <Text className="text-[11px] font-bold text-primary">{experienceTypeLabel(exp.type)}</Text>
+          </View>
+          <Text className="text-[14.5px] font-bold text-ink">{exp.title}</Text>
+          <Text className="mt-0.5 text-[12.5px] font-medium text-ink-soft">
+            {exp.organization} • <Text className="font-bold text-primary">{exp.period}</Text>
+          </Text>
+          {audience ? <Text className="mt-1 text-[12px] text-ink-soft">Public : {audience}</Text> : null}
+          {exp.subjects ? <Text className="text-[12px] text-ink-soft">Matières : {exp.subjects}</Text> : null}
+          {exp.description ? (
+            <Text className="mt-1.5 text-[12px] leading-[17px] text-ink-soft">{exp.description}</Text>
+          ) : null}
+          {experienceWarnings(exp).map((warning) => (
+            <InlineWarning key={warning} message={warning} />
+          ))}
+          {exp.fromCv ? <Text className="mt-1.5 text-[11px] font-semibold text-ink-faint">Pré-remplie depuis votre CV — modifiez pour confirmer</Text> : null}
+        </View>
+
+        <View className="flex-row items-center gap-1.5">
+          <PressableScale
+            onPress={onEdit}
+            accessibilityLabel={`Modifier ${exp.title}`}
+            className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface"
+          >
+            <PencilIcon size={13} color="#332E86" />
+          </PressableScale>
+          <PressableScale
+            onPress={onRemove}
+            accessibilityLabel={`Supprimer ${exp.title}`}
+            className="h-7 w-7 items-center justify-center rounded-lg border border-line bg-surface"
+          >
+            <TrashIcon size={13} color="#AC4A40" />
+          </PressableScale>
+        </View>
+      </View>
+    </View>
   );
 }

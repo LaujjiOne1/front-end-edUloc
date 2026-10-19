@@ -21,8 +21,12 @@ export interface LearningObjective {
 }
 
 export interface SearchCriteria {
-  subjectId: string; // UUID Subject
+  subjectId: string; // UUID Subject (vide si la matière est une saisie libre)
+  /** Matière saisie librement (hors catalogue) — recherche « pour moi » connecté, via POST /matching/search. */
+  subjectText?: string;
   levelId?: string;
+  /** Série (Première/Terminale) ou mention (université) choisie à l'étape 2. */
+  trackId?: string;
   beneficiaryType?: BeneficiaryType["id"];
   /** Texte saisi — affichage uniquement. L'API attend des coordonnées. */
   locationQuery?: string;
@@ -31,4 +35,9 @@ export interface SearchCriteria {
   radiusKm?: number; // [v1+]
   format?: LocationFormatId;
   objectiveId?: LearningObjective["id"];
+  /** Recherche sémantique (niveau universitaire) : catégorie du niveau (« Université »), libellés et besoin saisi. */
+  levelCategory?: string;
+  levelLabel?: string;
+  subjectLabel?: string;
+  needNote?: string;
 }

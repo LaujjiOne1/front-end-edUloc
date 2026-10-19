@@ -1,9 +1,13 @@
 import { create } from "zustand";
 
-import type { LocationFormatId, TutorGender } from "@/types/common";
+import type { AcademicTrack } from "@/types/track";
+import type { InPersonModeId, LocationFormatId, TutorGender } from "@/types/common";
 import type { EducationLevel } from "@/types/search";
 import type { LocalFile } from "@/types/message";
 import { canTeachLevel } from "@/lib/degree-policy";
+import type { ExperienceAudienceId, TutorExperienceType } from "@/lib/experience-types";
+import { backgroundFromCv, experienceFromCv, skillFromCv } from "@/lib/cv-prefill";
+import type { CvPrefillDto } from "@/types/cv-import";
 import type { TutorApplication, TutorDocumentKind, TutorSkill } from "@/types/tutor-application";
 
 /**
@@ -23,7 +27,7 @@ export interface TutorIdentityFields {
   email: string;
 }
 
-export type TutorExperienceType = "professionnelle" | "academique";
+export type { TutorExperienceType } from "@/lib/experience-types";
 
 export interface TutorExperienceEntry {
   id: string;
@@ -31,7 +35,14 @@ export interface TutorExperienceEntry {
   title: string;
   organization: string;
   period: string;
+  /** Public encadré (primaire, collège, lycée, université). */
+  audience: ExperienceAudienceId[];
+  /** Matières ou compétences enseignées. */
+  subjects?: string;
   description?: string;
+  /** Pré-remplie à partir du CV : à relire. L'enregistrement par le tuteur lève les avertissements de l'import. */
+  fromCv?: boolean;
+  warnings?: string[];
 }
 
 export type EducationDegreeId = "bac" | "licence" | "master" | "doctorat" | "other";
@@ -66,6 +77,10 @@ export interface TutorOfferDraft {
   id: string;
   skill: TutorSkill | null;
   level: EducationLevel | null;
+  /** Série (Première/Terminale, obligatoire) ou mention (université, facultative) de l'offre. */
+  track: AcademicTrack | null;
+  /** Case cochée sur la carte de la matière : seules les offres cochées sont envoyées. */
+  enabled: boolean;
   title: string;
   description: string;
   duration: OfferDuration | null;
@@ -76,11 +91,23 @@ export interface TutorOfferDraft {
 export interface TutorLocationEntry {
   id: string;
   label: string;
+  /** beneficiary_home = zone où le tuteur se déplace ; tutor_home = son adresse d'accueil ; public_place = point de rencontre. */
+  kind: InPersonModeId;
+  /** 0 pour l'adresse d'accueil (pas de zone). */
   radiusKm: number;
+  /** Exactement un lieu principal est exigé par le serveur : toujours le premier de la liste (voir `withPrimary`). */
   isPrimary: boolean;
   /** Coordonnées géocodées : la recherche de tuteurs est géographique (un lieu sans coordonnées n'est jamais trouvé). */
   latitude: number;
   longitude: number;
+}
+
+const KIND_ORDER: InPersonModeId[] = ["beneficiary_home", "tutor_home", "public_place"];
+
+/** Trie les lieux par type et marque le premier comme principal (le serveur exige exactement un lieu principal). */
+function withPrimary(locations: TutorLocationEntry[]): TutorLocationEntry[] {
+  const sorted = [...locations].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
+  return sorted.map((loc, i) => ({ ...loc, isPrimary: i === 0 }));
 }
 
 /** Tarif horaire proposé par défaut, en ariary (Ar). */
@@ -155,12 +182,17 @@ export const createDefaultOffer = (id = "offer-1"): TutorOfferDraft => ({
   id,
   skill: null,
   level: null,
+  track: null,
+  enabled: true,
+  // Titre et description sont générés à l'envoi (matière + niveau) ; le tarif est toujours à l'heure.
   title: "",
   description: "",
   duration: { id: "1h", label: "1 heure", hours: 1 },
-  hourlyRate: DEFAULT_HOURLY_RATE,
-  priceCalculated: DEFAULT_HOURLY_RATE,
+  hourlyRate: 0,
+  priceCalculated: 0,
 });
+
+const newOfferId = () => `offer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
 const INITIAL_DOCUMENTS: TutorDocumentEntry[] = [
   { kind: "identity", label: "Pièce justificative (CNI / Passeport)", provided: false },
@@ -185,14 +217,17 @@ export const INITIAL_WEEKLY_AVAILABILITY: WeeklyDayAvailability[] = [
 interface TutorApplicationStore {
   identity: TutorIdentityFields;
   background: TutorBackgroundFields;
+  /** Le tuteur a confirmé un pré-remplissage issu de son CV : les champs encore vides sont signalés. */
+  cvApplied: boolean;
   skills: TutorSkill[];
   subjectLevels: TutorSubjectLevels[];
   bio: string;
   introVideo: TutorIntroVideo | null;
-  offer: TutorOfferDraft;
+  /** Une offre par (matière, niveau[, série]) : le tuteur fixe un prix horaire par niveau enseigné. */
   offers: TutorOfferDraft[];
-  activeOfferIndex: number;
   formats: LocationFormatId[];
+  /** Façons d'enseigner en présentiel acceptées par le tuteur (utile quand le format « présentiel » est coché). */
+  inPersonModes: InPersonModeId[];
   locations: TutorLocationEntry[];
   availability: TutorAvailabilityEntry[];
   weeklyAvailability: WeeklyDayAvailability[];
@@ -203,6 +238,8 @@ interface TutorApplicationStore {
 
   setIdentity: (fields: Partial<TutorIdentityFields>) => void;
   setBackground: (fields: Partial<TutorBackgroundFields>) => void;
+  /** Applique ce que le tuteur a retenu de la proposition issue de son CV (formation, expériences, compétences). */
+  applyCvPrefill: (prefill: CvPrefillDto, keep: { education: boolean; experiences: number[]; skills: number[] }) => void;
   addExperience: (entry: Omit<TutorExperienceEntry, "id">) => void;
   updateExperience: (id: string, entry: Partial<TutorExperienceEntry>) => void;
   removeExperience: (id: string) => void;
@@ -213,16 +250,21 @@ interface TutorApplicationStore {
   toggleSubjectLevel: (skill: TutorSkill, level: EducationLevel) => void;
   setBio: (bio: string) => void;
   setIntroVideo: (video: TutorIntroVideo | null) => void;
-  setOffer: (fields: Partial<TutorOfferDraft>) => void;
+  /** Aligne les offres sur les niveaux déclarés : une ligne par niveau, sans toucher aux prix déjà saisis. */
+  syncOffersWithLevels: () => void;
+  /** « Ajouter un niveau » : déclare le niveau pour la matière si besoin et ajoute sa ligne de tarif (ou une autre série). */
+  addLevelOffer: (skill: TutorSkill, level: EducationLevel) => void;
   updateOfferAtIndex: (index: number, fields: Partial<TutorOfferDraft>) => void;
-  addNewOffer: () => void;
   removeOfferAtIndex: (index: number) => void;
-  setActiveOfferIndex: (index: number) => void;
   toggleFormat: (format: LocationFormatId) => void;
-  updatePrimaryRadius: (radiusKm: number) => void;
-  /** Définit (ou remplace) la zone principale à partir d'une adresse géocodée. */
-  setPrimaryLocation: (label: string, coordinates: { latitude: number; longitude: number }, radiusKm?: number) => void;
-  addSecondaryLocation: (label: string, radiusKm: number, coordinates: { latitude: number; longitude: number }) => void;
+  /** Coche / décoche une façon d'enseigner en présentiel ; décocher retire les lieux qui lui étaient associés. */
+  toggleInPersonMode: (mode: InPersonModeId) => void;
+  updateTravelRadius: (radiusKm: number) => void;
+  /** Définit (ou remplace) la zone de déplacement chez l'élève à partir d'une adresse géocodée. */
+  setTravelZone: (label: string, coordinates: { latitude: number; longitude: number }, radiusKm?: number) => void;
+  /** Définit (ou remplace) l'adresse où le tuteur accueille ses élèves. */
+  setTutorHome: (label: string, coordinates: { latitude: number; longitude: number }) => void;
+  addPublicPlace: (label: string, radiusKm: number, coordinates: { latitude: number; longitude: number }) => void;
   removeLocation: (id: string) => void;
   toggleWeeklyDay: (dayId: string) => void;
   addWeeklySlot: (dayId: string, startTime: string, endTime: string, format?: LocationFormatId) => void;
@@ -239,14 +281,14 @@ interface TutorApplicationStore {
 export const useTutorApplicationStore = create<TutorApplicationStore>((set) => ({
   identity: INITIAL_IDENTITY,
   background: INITIAL_BACKGROUND,
+  cvApplied: false,
   skills: [],
   subjectLevels: [],
   bio: "",
   introVideo: null,
-  offer: createDefaultOffer(),
-  offers: [createDefaultOffer()],
-  activeOfferIndex: 0,
+  offers: [],
   formats: [],
+  inPersonModes: [],
   locations: INITIAL_LOCATIONS,
   availability: [],
   weeklyAvailability: INITIAL_WEEKLY_AVAILABILITY,
@@ -257,6 +299,39 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
 
   setIdentity: (fields) => set((s) => ({ identity: { ...s.identity, ...fields } })),
 
+  applyCvPrefill: (prefill, keep) =>
+    set((s) => {
+      // Une nouvelle importation remplace la précédente : ses expériences ne sont jamais en double.
+      const manual = (s.background.experiences ?? []).filter((e) => !e.fromCv);
+      const imported: TutorExperienceEntry[] = keep.experiences
+        .map((i) => prefill.experiences[i])
+        .filter(Boolean)
+        .map((x) => ({ ...experienceFromCv(x), id: `exp-cv-${Date.now()}-${Math.random().toString(36).substring(2, 6)}` }));
+      const experiences = [...manual, ...imported];
+
+      const fromCv = keep.education ? backgroundFromCv(prefill.education) : null;
+      const background: TutorBackgroundFields = {
+        ...s.background,
+        // Un champ déjà saisi à la main n'est jamais écrasé par une valeur vide du CV.
+        degree: fromCv?.degree ?? s.background.degree,
+        field: fromCv?.field || s.background.field,
+        institution: fromCv?.institution || s.background.institution,
+        experiences,
+        experience: experiences.map((e) => `${e.title} (${e.organization})`).join(", "),
+      };
+
+      const known = new Set(s.skills.map((sk) => sk.id));
+      const skills = [...s.skills];
+      for (const i of keep.skills) {
+        const skill = prefill.skills[i] ? skillFromCv(prefill.skills[i]) : null;
+        if (skill && !known.has(skill.id)) {
+          known.add(skill.id);
+          skills.push(skill);
+        }
+      }
+      return { background, skills, cvApplied: true };
+    }),
+
   setBackground: (fields) =>
     set((s) => {
       const background = { ...s.background, ...fields };
@@ -264,8 +339,8 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
       // Le diplôme borne les niveaux enseignables : on retire ceux que le nouveau diplôme n'autorise plus.
       const degreeId = fields.degree.id;
       const subjectLevels = s.subjectLevels.map((sl) => ({ ...sl, levels: sl.levels.filter((l) => canTeachLevel(degreeId, l)) }));
-      const offers = s.offers.map((o) => (o.level && !canTeachLevel(degreeId, o.level) ? { ...o, level: null } : o));
-      return { background, subjectLevels, offers, offer: offers[s.activeOfferIndex] ?? s.offer };
+      const offers = s.offers.filter((o) => !o.level || canTeachLevel(degreeId, o.level));
+      return { background, subjectLevels, offers };
     }),
 
   addExperience: (entry) =>
@@ -317,6 +392,7 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
       return {
         skills: newSkills,
         subjectLevels: exists ? s.subjectLevels.filter((sl) => sl.skill.id !== skill.id) : s.subjectLevels,
+        offers: exists ? s.offers.filter((o) => o.skill?.id !== skill.id) : s.offers,
       };
     }),
 
@@ -330,7 +406,6 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
         skills: s.skills.map(withScope),
         subjectLevels: s.subjectLevels.map((sl) => ({ ...sl, skill: withScope(sl.skill) })),
         offers: s.offers.map((o) => (o.skill ? { ...o, skill: withScope(o.skill) } : o)),
-        offer: s.offer.skill ? { ...s.offer, skill: withScope(s.offer.skill) } : s.offer,
       };
     }),
 
@@ -345,102 +420,112 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
       const levels = hasLevel ? entry.levels.filter((l) => l.id !== level.id) : [...entry.levels, level];
       const next = [...s.subjectLevels];
       next[index] = { ...entry, levels };
-      return { subjectLevels: next };
+      // Un niveau retiré emporte ses lignes de tarif.
+      const offers = hasLevel ? s.offers.filter((o) => !(o.skill?.id === skill.id && o.level?.id === level.id)) : s.offers;
+      return { subjectLevels: next, offers };
     }),
 
   setBio: (bio) => set({ bio }),
 
   setIntroVideo: (introVideo) => set({ introVideo }),
 
-  setOffer: (fields) =>
+  syncOffersWithLevels: () =>
     set((s) => {
-      const updated = { ...s.offer, ...fields };
-      const hours = updated.duration?.hours ?? 1;
-      const rate = updated.hourlyRate ?? DEFAULT_HOURLY_RATE;
-      updated.priceCalculated = Math.round(hours * rate);
-      const newOffers = [...s.offers];
-      newOffers[s.activeOfferIndex] = updated;
-      return { offer: updated, offers: newOffers };
+      const wanted = s.subjectLevels.flatMap((sl) => sl.levels.map((level) => ({ skill: sl.skill, level })));
+      const sameRow = (o: TutorOfferDraft, w: { skill: TutorSkill; level: EducationLevel }) =>
+        o.skill?.id === w.skill.id && o.level?.id === w.level.id;
+      const kept = s.offers.filter((o) => wanted.some((w) => sameRow(o, w)));
+      const added = wanted
+        .filter((w) => !kept.some((o) => sameRow(o, w)))
+        .map((w) => ({ ...createDefaultOffer(newOfferId()), skill: w.skill, level: w.level }));
+      const rank = (o: TutorOfferDraft) => wanted.findIndex((w) => sameRow(o, w));
+      const offers = [...kept, ...added].sort((x, y) => rank(x) - rank(y));
+      return { offers };
+    }),
+
+  addLevelOffer: (skill, level) =>
+    set((s) => {
+      const entry = s.subjectLevels.find((sl) => sl.skill.id === skill.id);
+      const declared = entry?.levels.some((l) => l.id === level.id) ?? false;
+      const subjectLevels = declared
+        ? s.subjectLevels
+        : entry
+          ? s.subjectLevels.map((sl) => (sl === entry ? { ...sl, levels: [...sl.levels, level] } : sl))
+          : [...s.subjectLevels, { skill, levels: [level] }];
+      const row: TutorOfferDraft = { ...createDefaultOffer(newOfferId()), skill, level };
+      const lastOfSkill = s.offers.reduce((last, o, i) => (o.skill?.id === skill.id ? i : last), -1);
+      const offers = [...s.offers];
+      offers.splice(lastOfSkill === -1 ? offers.length : lastOfSkill + 1, 0, row);
+      return { subjectLevels, offers };
     }),
 
   updateOfferAtIndex: (index, fields) =>
     set((s) => {
-      const target = s.offers[index] ?? createDefaultOffer(`offer-${index + 1}`);
+      const target = s.offers[index];
+      if (!target) return s;
       const updated = { ...target, ...fields };
       const hours = updated.duration?.hours ?? 1;
-      const rate = updated.hourlyRate ?? DEFAULT_HOURLY_RATE;
-      updated.priceCalculated = Math.round(hours * rate);
-      const newOffers = [...s.offers];
-      newOffers[index] = updated;
-      return {
-        offers: newOffers,
-        offer: index === s.activeOfferIndex ? updated : s.offer,
-      };
+      updated.priceCalculated = Math.round(hours * (updated.hourlyRate ?? 0));
+      const offers = [...s.offers];
+      offers[index] = updated;
+      return { offers };
     }),
 
-  addNewOffer: () =>
-    set((s) => {
-      const newId = `offer-${s.offers.length + 1}`;
-      const freshOffer = createDefaultOffer(newId);
-      return {
-        offers: [...s.offers, freshOffer],
-        activeOfferIndex: s.offers.length,
-        offer: freshOffer,
-      };
-    }),
-
-  removeOfferAtIndex: (index) =>
-    set((s) => {
-      if (s.offers.length <= 1) return s;
-      const newOffers = s.offers.filter((_, i) => i !== index);
-      const nextIndex = Math.min(s.activeOfferIndex, newOffers.length - 1);
-      return {
-        offers: newOffers,
-        activeOfferIndex: nextIndex,
-        offer: newOffers[nextIndex],
-      };
-    }),
-
-  setActiveOfferIndex: (index) =>
-    set((s) => {
-      if (index >= 0 && index < s.offers.length) {
-        return { activeOfferIndex: index, offer: s.offers[index] };
-      }
-      return s;
-    }),
+  removeOfferAtIndex: (index) => set((s) => ({ offers: s.offers.filter((_, i) => i !== index) })),
 
   toggleFormat: (format) =>
-    set((s) => ({
-      formats: s.formats.includes(format) ? s.formats.filter((f) => f !== format) : [...s.formats, format],
-    })),
-
-  updatePrimaryRadius: (radiusKm) =>
-    set((s) => ({
-      locations: s.locations.map((loc) => (loc.isPrimary ? { ...loc, radiusKm } : loc)),
-    })),
-
-  setPrimaryLocation: (label, coordinates, radiusKm = 10) =>
     set((s) => {
-      const previous = s.locations.find((loc) => loc.isPrimary);
-      const primary: TutorLocationEntry = {
-        id: previous?.id ?? "loc-main",
-        label,
-        radiusKm: previous?.radiusKm ?? radiusKm,
-        isPrimary: true,
-        ...coordinates,
+      const on = s.formats.includes(format);
+      return {
+        formats: on ? s.formats.filter((f) => f !== format) : [...s.formats, format],
+        // Sans présentiel, plus de façon d'enseigner ni de lieu physique à conserver.
+        ...(on && format === "in_person" ? { inPersonModes: [], locations: [] } : {}),
       };
-      return { locations: [primary, ...s.locations.filter((loc) => !loc.isPrimary)] };
     }),
 
-  addSecondaryLocation: (label, radiusKm, coordinates) =>
+  toggleInPersonMode: (mode) =>
+    set((s) => {
+      const on = s.inPersonModes.includes(mode);
+      return {
+        inPersonModes: on ? s.inPersonModes.filter((m) => m !== mode) : [...s.inPersonModes, mode],
+        locations: on ? withPrimary(s.locations.filter((loc) => loc.kind !== mode)) : s.locations,
+      };
+    }),
+
+  updateTravelRadius: (radiusKm) =>
     set((s) => ({
-      locations: [...s.locations, { id: `loc-${Date.now()}`, label, radiusKm, isPrimary: false, ...coordinates }],
+      locations: s.locations.map((loc) => (loc.kind === "beneficiary_home" ? { ...loc, radiusKm } : loc)),
     })),
 
-  removeLocation: (id) =>
+  setTravelZone: (label, coordinates, radiusKm = 10) =>
+    set((s) => {
+      const previous = s.locations.find((loc) => loc.kind === "beneficiary_home");
+      const zone: TutorLocationEntry = {
+        id: previous?.id ?? "loc-travel",
+        label,
+        kind: "beneficiary_home",
+        radiusKm: previous?.radiusKm ?? radiusKm,
+        isPrimary: false,
+        ...coordinates,
+      };
+      return { locations: withPrimary([...s.locations.filter((loc) => loc.kind !== "beneficiary_home"), zone]) };
+    }),
+
+  setTutorHome: (label, coordinates) =>
+    set((s) => {
+      const home: TutorLocationEntry = { id: "loc-tutor-home", label, kind: "tutor_home", radiusKm: 0, isPrimary: false, ...coordinates };
+      return { locations: withPrimary([...s.locations.filter((loc) => loc.kind !== "tutor_home"), home]) };
+    }),
+
+  addPublicPlace: (label, radiusKm, coordinates) =>
     set((s) => ({
-      locations: s.locations.filter((loc) => loc.id !== id || loc.isPrimary),
+      locations: withPrimary([
+        ...s.locations,
+        { id: `loc-${Date.now()}`, label, kind: "public_place", radiusKm, isPrimary: false, ...coordinates },
+      ]),
     })),
+
+  removeLocation: (id) => set((s) => ({ locations: withPrimary(s.locations.filter((loc) => loc.id !== id)) })),
 
   toggleWeeklyDay: (dayId) =>
     set((s) => ({
@@ -501,14 +586,14 @@ export const useTutorApplicationStore = create<TutorApplicationStore>((set) => (
     set({
       identity: INITIAL_IDENTITY,
       background: INITIAL_BACKGROUND,
+      cvApplied: false,
       skills: [],
       subjectLevels: [],
       bio: "",
       introVideo: null,
-      offer: createDefaultOffer(),
-      offers: [createDefaultOffer()],
-      activeOfferIndex: 0,
+      offers: [],
       formats: [],
+      inPersonModes: [],
       locations: INITIAL_LOCATIONS,
       availability: [],
       weeklyAvailability: INITIAL_WEEKLY_AVAILABILITY,

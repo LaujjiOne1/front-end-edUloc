@@ -1,18 +1,22 @@
 import { type Href, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { MicIcon } from "@/components/icons";
 import { FadeIn } from "@/components/motion/fade-in";
+import { PressableScale } from "@/components/motion/pressable-scale";
 import { AuthHeader } from "@/components/ui/auth-header";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
+import { RadioCard } from "@/components/ui/selectable-card";
 import { SelectField, type SelectOption } from "@/components/ui/select-field";
 import { StepProgress } from "@/components/ui/step-progress";
+import { type ObjectivesState, useObjectives } from "@/hooks/use-objectives";
 import { BeneficiaryService, BeneficiaryServiceError } from "@/services/beneficiary.service";
 import { useBookingWizardStore } from "@/store/booking-wizard.store";
-import { useSearchWizardStore } from "@/store/search-wizard.store";
 import type { DifficultyId } from "@/types/beneficiary";
+import type { LearningObjective } from "@/types/search";
 
 const BOOKING_SUMMARY_ROUTE = "/booking-summary" as Href;
 
@@ -26,6 +30,10 @@ const DIFFICULTY_OPTIONS: (SelectOption & { id: DifficultyId })[] = [
   { id: "other", label: "Autre" },
 ];
 
+/**
+ * Étape « Votre besoin » (2/3) : objectif, difficulté et précision du besoin. Ces questions ne sont plus posées dans
+ * la recherche — elles ne servent qu'une fois le tuteur choisi, donc on les demande ici, à la réservation.
+ */
 export function BeneficiaryProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -33,10 +41,14 @@ export function BeneficiaryProfileScreen() {
   const beneficiary = useBookingWizardStore((s) => s.beneficiary);
   const difficulty = useBookingWizardStore((s) => s.difficulty);
   const setDifficulty = useBookingWizardStore((s) => s.setDifficulty);
-  const subject = useSearchWizardStore((s) => s.criteria.subject);
-  const objective = useSearchWizardStore((s) => s.criteria.objective);
+  const objective = useBookingWizardStore((s) => s.objective);
+  const setObjective = useBookingWizardStore((s) => s.setObjective);
+  const note = useBookingWizardStore((s) => s.note);
+  const setNote = useBookingWizardStore((s) => s.setNote);
+  const { state: objectivesState, retry: retryObjectives } = useObjectives();
   const [isNavigating, setIsNavigating] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [voiceNoteNotice, setVoiceNoteNotice] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -44,7 +56,7 @@ export function BeneficiaryProfileScreen() {
     }, []),
   );
 
-  // Guard: this recap needs both an active booking and a chosen beneficiary,
+  // Guard: this step needs both an active booking and a chosen beneficiary,
   // i.e. Beneficiary (step 1/3) must have been completed first.
   const hasContext = !!offer && !!beneficiary;
 
@@ -52,25 +64,37 @@ export function BeneficiaryProfileScreen() {
     if (!hasContext) router.replace("/home");
   }, [hasContext, router]);
 
-  // Default the field to whatever difficulty is already saved on this beneficiary.
+  // Default the fields to whatever is already saved on this beneficiary.
   useEffect(() => {
     if (!difficulty && beneficiary?.difficulty) setDifficulty(beneficiary.difficulty);
-  }, [difficulty, beneficiary, setDifficulty]);
+    if (!objective && beneficiary?.objective) setObjective(beneficiary.objective);
+  }, [difficulty, objective, beneficiary, setDifficulty, setObjective]);
 
   if (!hasContext || !beneficiary) return null;
 
   const selectedDifficulty = DIFFICULTY_OPTIONS.find((d) => d.id === difficulty) ?? null;
+  const canContinue = !!objective && !isNavigating;
+
+  const addVoiceNote = () => {
+    // Real voice-note capture needs a native recorder plus a media-upload endpoint — out of scope here.
+    // Surfacing this honestly rather than faking a successful record.
+    setVoiceNoteNotice("L'enregistrement vocal arrive bientôt.");
+  };
 
   const continueToSummary = async () => {
-    if (isNavigating) return;
+    if (!canContinue) return;
     setIsNavigating(true);
     setSaveError(null);
-    if (difficulty && difficulty !== beneficiary.difficulty) {
+    // L'objectif et la difficulté font partie du profil du bénéficiaire : ils sont enregistrés pour les prochaines demandes.
+    const changes: { objective?: LearningObjective["id"]; difficulty?: DifficultyId } = {};
+    if (objective !== beneficiary.objective) changes.objective = objective as LearningObjective["id"];
+    if (difficulty && difficulty !== beneficiary.difficulty) changes.difficulty = difficulty as DifficultyId;
+    if (Object.keys(changes).length > 0) {
       try {
-        await BeneficiaryService.updateBeneficiary(beneficiary.id, { difficulty: difficulty as DifficultyId });
+        await BeneficiaryService.updateBeneficiary(beneficiary.id, changes);
       } catch (error) {
         setSaveError(
-          error instanceof BeneficiaryServiceError ? error.message : "Impossible d'enregistrer la difficulté.",
+          error instanceof BeneficiaryServiceError ? error.message : "Impossible d'enregistrer votre besoin.",
         );
         setIsNavigating(false);
         return;
@@ -91,50 +115,126 @@ export function BeneficiaryProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         <FadeIn delay={40}>
-          <Text className="mb-1 text-[24px] font-bold text-ink">
-            À propos de {beneficiary.isSelf ? "vous" : beneficiary.firstName}
-          </Text>
+          <Text className="mb-1 text-[24px] font-bold text-ink">Votre besoin</Text>
           <Text className="mb-5 text-[13.5px] text-ink-soft">
-            {beneficiary.isSelf ? "Votre profil pédagogique" : "Son profil pédagogique"}
+            {[beneficiary.isSelf ? "Pour vous" : `Pour ${beneficiary.firstName}`, offer.subjectLabel, beneficiary.level?.label]
+              .filter(Boolean)
+              .join(" • ")}
           </Text>
         </FadeIn>
 
-        <FadeIn delay={90}>
-          <View className="mb-3 rounded-lg border border-line bg-surface p-4">
-            <SummaryRow label="Niveau" value={beneficiary.level?.label ?? "—"} />
-            <View className="h-px bg-line-soft" />
-            <SummaryRow label="Matière" value={subject?.label ?? "—"} />
-            <View className="h-px bg-line-soft" />
-            <SummaryRow label="Objectif" value={objective?.label ?? "—"} />
-          </View>
+        <FadeIn delay={80}>
+          <Text className="mb-[6px] ml-0.5 text-[12.5px] font-semibold uppercase tracking-[0.03em] text-ink-soft">
+            Quel est votre objectif&nbsp;?
+          </Text>
+          <ObjectiveList
+            state={objectivesState}
+            selectedId={objective || null}
+            onRetry={retryObjectives}
+            onSelect={(option) => setObjective(option.id)}
+          />
         </FadeIn>
 
         <FadeIn delay={130}>
-          <SelectField
-            label="Difficulté principale"
-            value={selectedDifficulty}
-            options={DIFFICULTY_OPTIONS}
-            onSelect={(option) => setDifficulty(option.id)}
-          />
-          {saveError ? <FormError message={saveError} /> : null}
+          <View className="mt-4">
+            <SelectField
+              label="Difficulté principale (facultatif)"
+              value={selectedDifficulty}
+              options={DIFFICULTY_OPTIONS}
+              onSelect={(option) => setDifficulty(option.id)}
+            />
+          </View>
         </FadeIn>
+
+        <FadeIn delay={170}>
+          <Text className="mb-[6px] ml-0.5 mt-1 text-[12.5px] font-semibold uppercase tracking-[0.03em] text-ink-soft">
+            Précisez votre besoin (facultatif)
+          </Text>
+          <TextInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="Décrivez ce dont vous avez besoin…"
+            placeholderTextColor="#9799AF"
+            multiline
+            maxLength={1000}
+            textAlignVertical="top"
+            className="h-[110px] rounded-sm border border-line bg-surface px-[14px] py-[13px] text-[15px] text-ink"
+            accessibilityLabel="Décrivez ce dont vous avez besoin"
+          />
+          <PressableScale onPress={addVoiceNote} accessibilityLabel="Ajouter un vocal">
+            <View className="mt-3 flex-row items-center gap-[14px] rounded-lg border border-dashed border-line bg-surface p-4">
+              <View className="h-11 w-11 items-center justify-center rounded-full bg-accent-tint">
+                <MicIcon size={20} color="#0E9C82" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-[14.5px] font-bold text-ink">Ajouter un vocal</Text>
+                <Text className="text-[12.5px] text-ink-soft">Expliquez votre besoin à l&apos;oral</Text>
+              </View>
+            </View>
+          </PressableScale>
+          {voiceNoteNotice ? <Text className="mt-2 text-[12.5px] text-ink-faint">{voiceNoteNotice}</Text> : null}
+        </FadeIn>
+
+        {saveError ? (
+          <View className="mt-4">
+            <FormError message={saveError} />
+          </View>
+        ) : null}
       </ScrollView>
 
       <View
         className="border-t border-line-soft bg-surface px-5 pt-4"
         style={{ paddingBottom: Math.max(insets.bottom, 22) }}
       >
-        <Button label="Continuer" loading={isNavigating} disabled={isNavigating} onPress={continueToSummary} />
+        <Button label="Continuer" loading={isNavigating} disabled={!canContinue} onPress={continueToSummary} />
       </View>
     </View>
   );
 }
 
-function SummaryRow({ label, value }: { label: string; value: string }) {
+type ObjectiveListProps = {
+  state: ObjectivesState;
+  selectedId: string | null;
+  onRetry: () => void;
+  onSelect: (objective: LearningObjective) => void;
+};
+
+function ObjectiveList({ state, selectedId, onRetry, onSelect }: ObjectiveListProps) {
+  if (state.status === "loading") {
+    return (
+      <View className="gap-[10px]">
+        {[0, 1, 2].map((i) => (
+          <View key={i} className="h-[54px] rounded-lg bg-line-soft" />
+        ))}
+      </View>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <View className="flex-row items-center gap-3">
+        <Text className="flex-1 text-[13.5px] text-error">{state.message}</Text>
+        <PressableScale onPress={onRetry} accessibilityLabel="Réessayer de charger les objectifs">
+          <Text className="text-[13.5px] font-semibold text-primary">Réessayer</Text>
+        </PressableScale>
+      </View>
+    );
+  }
+
+  if (state.status === "empty") {
+    return <Text className="text-[13.5px] text-ink-faint">Aucun objectif disponible pour le moment.</Text>;
+  }
+
   return (
-    <View className="flex-row items-center justify-between py-2">
-      <Text className="text-[14px] text-ink-soft">{label}</Text>
-      <Text className="text-[14px] font-bold text-ink">{value}</Text>
+    <View className="gap-[10px]">
+      {state.objectives.map((option) => (
+        <RadioCard
+          key={option.id}
+          label={option.label}
+          selected={option.id === selectedId}
+          onPress={() => onSelect(option)}
+        />
+      ))}
     </View>
   );
 }

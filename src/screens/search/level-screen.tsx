@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ChevronRightIcon } from "@/components/icons";
 import { FadeIn } from "@/components/motion/fade-in";
 import { PressableScale } from "@/components/motion/pressable-scale";
 import { AuthHeader } from "@/components/ui/auth-header";
@@ -10,20 +11,23 @@ import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/selectable-card";
 import { StepProgress } from "@/components/ui/step-progress";
 import { type LevelsState, useLevels } from "@/hooks/use-levels";
+import { type LevelBlock, funnelSteps, groupLevels } from "@/lib/search-funnel";
 import { useSearchWizardStore } from "@/store/search-wizard.store";
 import type { EducationLevel } from "@/types/search";
 
-const FOR_WHOM_ROUTE = "/search/for-whom" as Href;
+const TRACK_ROUTE = "/search/track" as Href;
+const SUBJECT_ROUTE = "/search/subject" as Href;
 const SUMMARY_ROUTE = "/search/summary" as Href;
 
+/** Étape 1 de l'entonnoir : un bloc parent se déplie pour choisir le niveau précis (choix unique). */
 export function LevelScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { from } = useLocalSearchParams<{ from?: string }>();
   const { state, retry } = useLevels();
-  const subject = useSearchWizardStore((s) => s.criteria.subject);
   const selectedLevel = useSearchWizardStore((s) => s.criteria.level);
   const setLevel = useSearchWizardStore((s) => s.setLevel);
+  const [openBlockId, setOpenBlockId] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
 
   useFocusEffect(
@@ -32,20 +36,29 @@ export function LevelScreen() {
     }, []),
   );
 
-  const continueToForWhom = () => {
+  const steps = funnelSteps(selectedLevel);
+  const blocks = state.status === "success" ? groupLevels(state.levels) : [];
+  // Au retour sur l'écran, le bloc du niveau déjà choisi reste ouvert.
+  const openId = openBlockId ?? blocks.find((b) => b.levels.some((l) => l.id === selectedLevel?.id))?.id ?? null;
+
+  /** Filière si le niveau en demande une, sinon matière ; depuis le récapitulatif, on y revient dès que tout est renseigné. */
+  const continueFunnel = () => {
     if (isNavigating || !selectedLevel) return;
     setIsNavigating(true);
-    if (from === "summary") {
+    const { track, subject } = useSearchWizardStore.getState().criteria;
+    if (from === "summary" && subject && (!selectedLevel.trackKind || track)) {
       router.push(SUMMARY_ROUTE);
+    } else if (selectedLevel.trackKind) {
+      router.push(TRACK_ROUTE);
     } else {
-      router.push(FOR_WHOM_ROUTE);
+      router.push(SUBJECT_ROUTE);
     }
   };
 
   return (
     <View className="flex-1 bg-paper" style={{ paddingTop: insets.top }}>
       <AuthHeader onBack={() => router.back()} />
-      <StepProgress step={2} total={7} />
+      <StepProgress step={steps.level} total={steps.total} />
 
       <ScrollView
         className="flex-1"
@@ -53,36 +66,47 @@ export function LevelScreen() {
         showsVerticalScrollIndicator={false}
       >
         <FadeIn delay={40}>
-          <Text className="mb-1 text-[26px] font-bold text-ink">Quel est le niveau concerné&nbsp;?</Text>
-          <Text className="mb-5 text-[14px] text-ink-soft">{subject?.label ?? " "}</Text>
+          <Text className="mb-1 text-[26px] font-bold text-ink">Quel est le niveau d&apos;études&nbsp;?</Text>
+          <Text className="mb-5 text-[14px] text-ink-soft">Choisissez un niveau, puis précisez-le</Text>
         </FadeIn>
 
-        <LevelList state={state} selectedId={selectedLevel?.id ?? null} onRetry={retry} onSelect={setLevel} />
+        <LevelBlocks
+          state={state}
+          blocks={blocks}
+          openId={openId}
+          selectedId={selectedLevel?.id ?? null}
+          onToggle={(id) => setOpenBlockId(openId === id ? "" : id)}
+          onRetry={retry}
+          onSelect={setLevel}
+        />
       </ScrollView>
 
       <View
         className="border-t border-line-soft bg-surface px-5 pt-4"
         style={{ paddingBottom: Math.max(insets.bottom, 22) }}
       >
-        <Button label="Continuer" disabled={!selectedLevel || isNavigating} onPress={continueToForWhom} />
+        <Button label="Continuer" disabled={!selectedLevel || isNavigating} onPress={continueFunnel} />
       </View>
     </View>
   );
 }
 
-type LevelListProps = {
+type LevelBlocksProps = {
   state: LevelsState;
+  blocks: LevelBlock[];
+  openId: string | null;
   selectedId: string | null;
+  onToggle: (blockId: string) => void;
   onRetry: () => void;
   onSelect: (level: EducationLevel) => void;
 };
 
-function LevelList({ state, selectedId, onRetry, onSelect }: LevelListProps) {
+function LevelBlocks({ state, blocks, openId, selectedId, onToggle, onRetry, onSelect }: LevelBlocksProps) {
   if (state.status === "loading") {
     return (
       <View className="gap-[10px]">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <View key={i} className="h-[54px] rounded-lg bg-line-soft" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <View key={i} className="h-[58px] rounded-lg bg-line-soft" />
         ))}
       </View>
     );
@@ -99,17 +123,53 @@ function LevelList({ state, selectedId, onRetry, onSelect }: LevelListProps) {
     );
   }
 
-  if (state.status === "empty") {
+  if (state.status === "empty" || blocks.length === 0) {
     return <Text className="text-[13.5px] text-ink-faint">Aucun niveau disponible pour le moment.</Text>;
   }
 
   return (
     <View className="gap-[10px]">
-      {state.levels.map((level, index) => (
-        <FadeIn key={level.id} delay={100 + index * 40}>
-          <RadioCard label={level.label} selected={level.id === selectedId} onPress={() => onSelect(level)} />
-        </FadeIn>
-      ))}
+      {blocks.map((block, index) => {
+        const isOpen = block.id === openId;
+        const chosen = block.levels.find((l) => l.id === selectedId);
+        return (
+          <FadeIn key={block.id} delay={90 + index * 40}>
+            <View className={["overflow-hidden rounded-lg border bg-surface", chosen ? "border-primary" : "border-line"].join(" ")}>
+              <PressableScale
+                onPress={() => onToggle(block.id)}
+                accessibilityLabel={`${block.label}, ${isOpen ? "replier" : "déplier"}`}
+              >
+                <View className="flex-row items-center gap-3 p-4">
+                  <Text className="flex-1 text-[15.5px] font-bold text-ink">{block.label}</Text>
+                  {chosen ? (
+                    <View className="rounded-full bg-primary-tint px-2.5 py-0.5">
+                      <Text className="text-[12px] font-bold text-primary">{chosen.label}</Text>
+                    </View>
+                  ) : null}
+                  <View style={{ transform: [{ rotate: isOpen ? "90deg" : "0deg" }] }}>
+                    <ChevronRightIcon size={17} color="#9799AF" />
+                  </View>
+                </View>
+              </PressableScale>
+
+              {isOpen ? (
+                <FadeIn delay={0}>
+                  <View className="gap-[8px] border-t border-line-soft bg-paper p-3">
+                    {block.levels.map((level) => (
+                      <RadioCard
+                        key={level.id}
+                        label={level.label}
+                        selected={level.id === selectedId}
+                        onPress={() => onSelect(level)}
+                      />
+                    ))}
+                  </View>
+                </FadeIn>
+              ) : null}
+            </View>
+          </FadeIn>
+        );
+      })}
     </View>
   );
 }

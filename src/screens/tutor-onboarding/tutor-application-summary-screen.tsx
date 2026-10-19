@@ -12,7 +12,11 @@ import { FormError } from "@/components/ui/form-error";
 import { priceLabel } from "@/api/format/datetime";
 import { useSubmitTutorApplication } from "@/hooks/use-submit-tutor-application";
 import { useAuthStore } from "@/store/auth.store";
-import { DEFAULT_HOURLY_RATE, useTutorApplicationStore } from "@/store/tutor-application.store";
+import { EXPERIENCE_AUDIENCES, EXPERIENCE_TYPES } from "@/lib/experience-types";
+import { offerDescription, offerTitle } from "@/lib/offer-labels";
+import { trackKindOf } from "@/lib/search-funnel";
+import { useTutorApplicationStore } from "@/store/tutor-application.store";
+import type { LocationFormatId } from "@/types/common";
 import type { TutorApplicationSubmission } from "@/types/tutor-application";
 
 /** "12/05/1997" -> "1997-05-12" (IsoDate) — identity.birthDate is captured as JJ/MM/AAAA. */
@@ -45,9 +49,12 @@ export function TutorApplicationSummaryScreen() {
   const subjectLevels = useTutorApplicationStore((s) => s.subjectLevels);
   const bio = useTutorApplicationStore((s) => s.bio);
   const introVideo = useTutorApplicationStore((s) => s.introVideo);
-  const offers = useTutorApplicationStore((s) => s.offers);
+  const allOffers = useTutorApplicationStore((s) => s.offers);
+  // Seules les lignes de tarif cochées deviennent des offres.
+  const offers = allOffers.filter((o) => o.enabled);
   const formats = useTutorApplicationStore((s) => s.formats);
   const locations = useTutorApplicationStore((s) => s.locations);
+  const inPersonModes = useTutorApplicationStore((s) => s.inPersonModes);
   const weeklyAvailability = useTutorApplicationStore((s) => s.weeklyAvailability);
   const dateAvailability = useTutorApplicationStore((s) => s.dateAvailability);
   const documents = useTutorApplicationStore((s) => s.documents);
@@ -110,8 +117,10 @@ export function TutorApplicationSummaryScreen() {
       id: "offers",
       label: "Offres & Tarification",
       route: "/tutor-offer" as Href,
-      done: offers.length > 0 && !!offers[0].title,
-      summary: `${offers.length} offre${offers.length > 1 ? "s" : ""} • ${priceLabel({ amount: String(offers[0]?.hourlyRate ?? DEFAULT_HOURLY_RATE), currency: "MGA" })}/h`,
+      done: offers.length > 0 && offers.every((o) => o.hourlyRate > 0),
+      summary: offers.length
+        ? `${offers.length} offre${offers.length > 1 ? "s" : ""} • dès ${priceLabel({ amount: String(Math.min(...offers.map((o) => o.hourlyRate))), currency: "MGA" })}/h`
+        : "Aucune offre",
     },
     {
       id: "locations",
@@ -145,12 +154,16 @@ export function TutorApplicationSummaryScreen() {
 
   // Ce que le serveur exige (voir TutorApplicationsService.submit) : on le dit AVANT l'envoi plutôt
   // que de laisser un dossier incomplet partir et revenir en erreur.
-  const hasPrimaryLocation = locations.some((l) => l.isPrimary);
-  const hasValidOffer = offers.some((o) => !!o.skill && !!o.level && !!o.duration && o.title.trim() && o.description.trim());
+  // Chaque façon d'enseigner en présentiel choisie doit avoir son lieu (zone, adresse d'accueil, lieu public).
+  const hasAllPlaces = inPersonModes.every((mode) => locations.some((l) => l.kind === mode));
+  const needsPlaces = formats.includes("in_person");
+  const hasValidOffer =
+    offers.length > 0 &&
+    offers.every((o) => !!o.skill && !!o.level && !!o.duration && o.hourlyRate > 0 && (trackKindOf(o.level) !== "serie" || !!o.track));
   const missing: string[] = [];
   if (skills.length === 0 || subjectLevels.every((sl) => sl.levels.length === 0)) missing.push("au moins une matière avec son niveau");
   if (!hasValidOffer) missing.push("au moins une offre complète");
-  if (!hasPrimaryLocation) missing.push("votre zone d'intervention");
+  if (needsPlaces && (inPersonModes.length === 0 || !hasAllPlaces)) missing.push("vos lieux d'intervention");
   if (!introVideo) missing.push("votre vidéo de présentation");
   const canSubmit = missing.length === 0 && !isSubmitting;
 
@@ -161,6 +174,18 @@ export function TutorApplicationSummaryScreen() {
     };
     const format =
       formats.length > 1 ? "both" : formats[0] ?? "both";
+    // Une plage en présentiel est proposée pour chaque façon d'enseigner choisie (déplacement, accueil chez soi, lieu
+    // public), chacune sur son lieu : le demandeur choisit ensuite où il veut le cours. Le tuteur peut affiner plage par
+    // plage depuis « Mes disponibilités ».
+    const inPersonPlaceIndexes = [
+      ...new Set(inPersonModes.map((mode) => locations.findIndex((l) => l.kind === mode)).filter((i) => i >= 0)),
+    ];
+    const placeVariants = (slotFormat: LocationFormatId): { format: LocationFormatId; placeIndex: number | null }[] => [
+      ...(slotFormat !== "in_person" ? [{ format: "online" as const, placeIndex: null }] : []),
+      ...(slotFormat !== "online"
+        ? inPersonPlaceIndexes.map((placeIndex) => ({ format: "in_person" as const, placeIndex }))
+        : []),
+    ];
     const submission: TutorApplicationSubmission = {
       firstName: identity.firstName.trim(),
       lastName: identity.lastName.trim(),
@@ -175,10 +200,12 @@ export function TutorApplicationSummaryScreen() {
       gender: identity.gender ?? undefined,
       birthDate: toIsoDate(identity.birthDate),
       experiences: background.experiences.map((entry) => ({
-        type: entry.type === "professionnelle" ? "PROFESSIONAL" : "ACADEMIC",
+        type: EXPERIENCE_TYPES.find((t) => t.id === entry.type)?.backend ?? "PROFESSIONAL",
         title: entry.title,
         organization: entry.organization,
         period: entry.period,
+        audience: entry.audience.map((id) => EXPERIENCE_AUDIENCES.find((a) => a.id === id)!.backend),
+        subjectsTaught: entry.subjects,
         description: entry.description,
       })),
       subjects: subjectLevels.map((sl) => ({
@@ -191,35 +218,29 @@ export function TutorApplicationSummaryScreen() {
         return [{
           subjectId: offer.skill.id,
           educationLevelId: offer.level.id,
-          title: offer.title.trim(),
-          description: offer.description.trim(),
+          trackId: offer.track?.id,
+          title: offer.title.trim() || offerTitle(offer.skill, offer.level, offer.track),
+          description: offer.description.trim() || offerDescription(offer.skill, offer.level, offer.track),
           format,
           durationMinutes: Math.round(offer.duration.hours * 60),
           price: offer.priceCalculated || Math.round(offer.hourlyRate * offer.duration.hours),
           currency: "MGA",
         }];
       }),
-      locations: locations.map(({ label, radiusKm, isPrimary, latitude, longitude }) => ({ label, radiusKm, isPrimary, latitude, longitude })),
+      locations: locations.map(({ label, kind, radiusKm, isPrimary, latitude, longitude }) => ({ label, kind, radiusKm, isPrimary, latitude, longitude })),
       weeklyAvailability: weeklyAvailability.flatMap((day) =>
         day.active
           ? [{
               dayOfWeek: dayIndexes[day.dayId],
-              slots: day.slots.map(({ startTime, endTime, format }) => ({
-                startTime,
-                endTime,
-                format,
-                placeIndex: format === "online" ? null : Math.max(0, locations.findIndex((location) => location.isPrimary)),
-              })),
+              slots: day.slots.flatMap(({ startTime, endTime, format }) =>
+                placeVariants(format).map((variant) => ({ startTime, endTime, ...variant })),
+              ),
             }]
           : [],
       ),
-      dateAvailability: dateAvailability.map(({ date, startTime, endTime, format }) => ({
-        date,
-        startTime,
-        endTime,
-        format,
-        placeIndex: format === "online" ? null : Math.max(0, locations.findIndex((location) => location.isPrimary)),
-      })),
+      dateAvailability: dateAvailability.flatMap(({ date, startTime, endTime, format }) =>
+        placeVariants(format).map((variant) => ({ date, startTime, endTime, ...variant })),
+      ),
       documents: documents
         .filter((d) => d.provided && d.file)
         .map((d) => ({ kind: d.kind, file: d.file! })),

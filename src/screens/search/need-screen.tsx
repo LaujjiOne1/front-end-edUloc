@@ -1,5 +1,5 @@
-import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { type Href, useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -19,11 +19,21 @@ import { AuthHeader } from "@/components/ui/auth-header";
 import { MenuCard } from "@/components/ui/selectable-card";
 import { StepProgress } from "@/components/ui/step-progress";
 import { type SubjectsState, useSubjects } from "@/hooks/use-subjects";
+import { allowsFreeTextSubject, funnelSteps, subjectsFor } from "@/lib/search-funnel";
 import { useSearchWizardStore } from "@/store/search-wizard.store";
 import type { Category } from "@/types/category";
 import type { ComponentType } from "react";
 
-const LEVEL_ROUTE = "/search/level" as Href;
+/** Minuscules, sans accents ni ponctuation : « Algèbre-Linéaire » ≡ « algebre lineaire ». */
+const normalize = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const LEVEL_ROUTE = "/search" as Href;
 const SUMMARY_ROUTE = "/search/summary" as Href;
 
 // "programming" reuses SubjectIcon and "math" reuses LevelIcon — those
@@ -41,8 +51,9 @@ const SUBJECT_ICONS: Record<string, ComponentType<IconProps>> = {
 export function NeedScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { from } = useLocalSearchParams<{ from?: string }>();
-  const { state, retry } = useSubjects();
+  const { state: catalogState, retry } = useSubjects();
+  const level = useSearchWizardStore((s) => s.criteria.level);
+  const track = useSearchWizardStore((s) => s.criteria.track);
   const setSubject = useSearchWizardStore((s) => s.setSubject);
   const [query, setQuery] = useState("");
   const [isNavigating, setIsNavigating] = useState(false);
@@ -53,21 +64,53 @@ export function NeedScreen() {
     }, []),
   );
 
+  // Guard : la matière vient en dernier — le niveau (et la filière qu'il demande) doivent être choisis avant.
+  const hasContext = !!level && (!level.trackKind || !!track);
+  useEffect(() => {
+    if (!hasContext) router.replace(LEVEL_ROUTE);
+  }, [hasContext, router]);
+
+  // Seules les matières du bloc choisi (et de la série, au lycée) sont proposées.
+  const state: SubjectsState =
+    catalogState.status === "success"
+      ? (() => {
+          const categories = subjectsFor(catalogState.categories, level, track);
+          return categories.length > 0 ? { status: "success", categories } : { status: "empty" };
+        })()
+      : catalogState;
+  const freeText = allowsFreeTextSubject(level);
+  const steps = funnelSteps(level);
+
   const selectSubject = (subject: Category) => {
     if (isNavigating) return;
     setIsNavigating(true);
     setSubject(subject);
-    if (from === "summary") {
-      router.push(SUMMARY_ROUTE);
-    } else {
-      router.push(LEVEL_ROUTE);
-    }
+    router.push(SUMMARY_ROUTE);
+  };
+
+  /**
+   * Saisie libre : la matière tapée n'est pas forcément au catalogue (« Analyse 2 », « Transformées de Fourier »…).
+   * Si elle correspond exactement à une matière connue, c'est celle-ci qui est choisie ; sinon elle est conservée
+   * telle quelle et le serveur la rapproche des tuteurs (recherche « pour moi », connecté).
+   */
+  const typed = query.trim();
+  const catalog = state.status === "success" ? state.categories : [];
+  const exact = typed ? catalog.find((c) => normalize(c.label) === normalize(typed)) : undefined;
+  const chooseTyped = () => {
+    if (!freeText && !exact) return;
+    if (exact) return selectSubject(exact);
+    selectSubject({
+      id: `free:${normalize(typed)}`,
+      label: typed.charAt(0).toLocaleUpperCase("fr") + typed.slice(1),
+      group: null,
+      freeText: true,
+    });
   };
 
   return (
     <View className="flex-1 bg-paper" style={{ paddingTop: insets.top }}>
       <AuthHeader onBack={() => router.back()} />
-      <StepProgress step={1} total={7} />
+      <StepProgress step={steps.subject} total={steps.total} />
 
       <ScrollView
         className="flex-1"
@@ -76,7 +119,10 @@ export function NeedScreen() {
       >
         <FadeIn delay={40}>
           <Text className="mb-1 text-[26px] font-bold text-ink">Que recherchez-vous&nbsp;?</Text>
-          <Text className="mb-5 text-[14px] text-ink-soft">Choisissez une matière ou un domaine</Text>
+          <Text className="mb-5 text-[14px] text-ink-soft">
+            {[level?.label, track?.label].filter(Boolean).join(" • ")}
+            {freeText ? " — choisissez une matière ou saisissez votre cours" : ""}
+          </Text>
         </FadeIn>
 
         <FadeIn delay={90}>
@@ -85,7 +131,7 @@ export function NeedScreen() {
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder="Rechercher une matière"
+              placeholder={freeText ? "Rechercher ou saisir un cours (ex. Analyse 2)" : "Rechercher une matière"}
               placeholderTextColor="#9799AF"
               className="flex-1 text-[15px] text-ink"
               accessibilityLabel="Rechercher une matière"
@@ -100,6 +146,21 @@ export function NeedScreen() {
           onSelect={selectSubject}
           disabled={isNavigating}
         />
+
+        {freeText && typed.length >= 2 && !exact ? (
+          <FadeIn delay={60}>
+            <View className="mt-[10px]">
+              <MenuCard
+                icon={<SearchIcon size={19} color="#332E86" />}
+                title={`Chercher « ${typed} »`}
+                description="Ma matière n'est pas dans la liste : je la saisis moi-même"
+                onPress={chooseTyped}
+                disabled={isNavigating}
+                accessibilityLabel={`Chercher la matière saisie : ${typed}`}
+              />
+            </View>
+          </FadeIn>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -136,7 +197,7 @@ function SubjectList({ state, query, onRetry, onSelect, disabled }: SubjectListP
   }
 
   if (state.status === "empty") {
-    return <Text className="text-[13.5px] text-ink-faint">Aucune matière disponible pour le moment.</Text>;
+    return <Text className="text-[13.5px] text-ink-faint">Aucune matière disponible pour ce niveau pour le moment.</Text>;
   }
 
   const q = query.trim().toLowerCase();

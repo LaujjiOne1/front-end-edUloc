@@ -10,6 +10,8 @@ import { FormError } from "@/components/ui/form-error";
 import { type SelectOption, SelectField } from "@/components/ui/select-field";
 import { TextField } from "@/components/ui/text-field";
 import { useOffer } from "@/hooks/use-offer";
+import { useTracks } from "@/hooks/use-tracks";
+import { trackKindOf } from "@/lib/search-funnel";
 import { type OfferSaveInput, useOfferActions, type OfferActionState } from "@/hooks/use-offer-actions";
 import { useTutorProfile } from "@/hooks/use-tutor-profile";
 import { OfferStatusBadge } from "@/screens/tutor-dashboard/offers-screen";
@@ -117,9 +119,16 @@ function ManageOfferForm({
   const [price, setPrice] = useState(existingOffer ? String(existingOffer.price.amount) : "");
   const [skillOption, setSkillOption] = useState<SelectOption | null>(null);
   const [levelOption, setLevelOption] = useState<SelectOption | null>(null);
+  const [trackOption, setTrackOption] = useState<SelectOption | null>(null);
 
   const skillOptions: SelectOption[] = profile ? profile.subjects.map((s) => ({ id: s.skill.id, label: s.skill.label })) : [];
   const levelOptions: SelectOption[] = profile ? (profile.subjects.find((s) => s.skill.id === skillOption?.id)?.levels ?? []) : [];
+
+  // Série (Première/Terminale) ou mention : choisie à la création, selon le niveau retenu.
+  const levelRef = profile?.subjects.find((s) => s.skill.id === skillOption?.id)?.levels.find((l) => l.id === levelOption?.id);
+  const trackKind = trackKindOf(levelRef);
+  const { state: tracksState } = useTracks(trackKind, levelRef?.label);
+  const trackOptions: SelectOption[] = tracksState.status === "success" ? tracksState.tracks : [];
 
   const isEdit = !!existingOffer;
   const isSaving = actionState.status === "saving";
@@ -131,6 +140,7 @@ function ManageOfferForm({
     ? title.trim().length > 0 && description.trim().length > 0 && !!duration && hasValidPrice
     : !!skillOption &&
       !!levelOption &&
+      (trackKind !== "serie" || !!trackOption) &&
       title.trim().length > 0 &&
       description.trim().length > 0 &&
       !!duration &&
@@ -155,6 +165,7 @@ function ManageOfferForm({
         data: {
           subjectId: skillOption.id,
           levelId: levelOption.id,
+          trackId: trackOption?.id ?? null,
           title: title.trim(),
           description: description.trim(),
           durationMinutes: duration.minutes,
@@ -197,6 +208,7 @@ function ManageOfferForm({
               onSelect={(option) => {
                 setSkillOption(option);
                 setLevelOption(null);
+                setTrackOption(null);
               }}
             />
             <SelectField
@@ -205,8 +217,21 @@ function ManageOfferForm({
               options={levelOptions}
               placeholder={skillOption ? "Sélectionner" : "Choisissez d'abord une matière"}
               disabled={!skillOption}
-              onSelect={setLevelOption}
+              onSelect={(option) => {
+                setLevelOption(option);
+                setTrackOption(null);
+              }}
             />
+            {trackKind ? (
+              <SelectField
+                label={trackKind === "serie" ? "Série" : "Mention (facultatif)"}
+                value={trackOption}
+                options={trackOptions}
+                placeholder={tracksState.status === "loading" ? "Chargement..." : "Sélectionner"}
+                disabled={tracksState.status !== "success"}
+                onSelect={setTrackOption}
+              />
+            ) : null}
           </>
         )}
 

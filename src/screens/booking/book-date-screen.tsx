@@ -10,10 +10,12 @@ import { AuthHeader } from "@/components/ui/auth-header";
 import { Button } from "@/components/ui/button";
 import { type DayMarkers, HabitCalendar } from "@/components/ui/habit-calendar";
 import { useOfferSlots } from "@/hooks/use-offer-slots";
-import { TEACHING_MODE_LABELS } from "@/lib/teaching-mode";
+import { TeachingModePicker } from "@/components/booking/teaching-mode-picker";
+import { offerTeachingModes, slotTeachingMode } from "@/lib/teaching-mode";
 import { toIsoDate } from "@/lib/week";
 import { useAuthStore } from "@/store/auth.store";
 import { useBookingWizardStore } from "@/store/booking-wizard.store";
+import type { TeachingModeId } from "@/types/booking";
 import type { OfferSlot } from "@/types/offer";
 import { formatDayLabel } from "@/utils/calendar";
 
@@ -37,9 +39,16 @@ export function BookDateScreen() {
   const { slots, loading, error, ensureRange, retry } = useOfferSlots(offer);
   const todayIso = useMemo(() => toIsoDate(new Date()), []);
 
+  const places = useMemo(() => offer?.places ?? [], [offer]);
+  const availableModes = useMemo(() => offerTeachingModes(places), [places]);
+
   const [pickedDate, setPickedDate] = useState<string | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(preselectedSlot?.id ?? null);
   const [isNavigating, setIsNavigating] = useState(false);
+  // Où se déroule le cours : le choix filtre les créneaux. Un seul mode proposé par le tuteur → retenu d'office.
+  const [mode, setMode] = useState<TeachingModeId | null>(
+    preselectedSlot ? slotTeachingMode(preselectedSlot, places) : availableModes.length === 1 ? availableModes[0] : null,
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -47,8 +56,18 @@ export function BookDateScreen() {
     }, []),
   );
 
-  // Jours avec au moins un créneau libre → pastille sur le calendrier.
-  const availableSlots = useMemo(() => slots.filter((s) => s.status === "available"), [slots]);
+  const chooseMode = (next: TeachingModeId) => {
+    if (next === mode) return;
+    setMode(next);
+    setSelectedSlotId(null);
+    setPickedDate(null);
+  };
+
+  // Jours avec au moins un créneau libre dans le mode choisi → pastille sur le calendrier.
+  const availableSlots = useMemo(
+    () => slots.filter((s) => s.status === "available" && mode !== null && slotTeachingMode(s, places) === mode),
+    [slots, mode, places],
+  );
   const markers = useMemo(() => {
     const out: Record<string, DayMarkers> = {};
     for (const slot of availableSlots) out[slot.date] = { availability: true };
@@ -58,8 +77,12 @@ export function BookDateScreen() {
 
   // Date affichée : celle que le demandeur a choisie, sinon celle d'un créneau déjà retenu, sinon la première
   // disponible, sinon aujourd'hui.
-  const selectedDate = pickedDate ?? preselectedSlot?.date ?? firstAvailableDate ?? todayIso;
-  const daySlots = useMemo(() => slots.filter((s) => s.date === selectedDate), [slots, selectedDate]);
+  const preselectedDate = preselectedSlot && slotTeachingMode(preselectedSlot, places) === mode ? preselectedSlot.date : null;
+  const selectedDate = pickedDate ?? preselectedDate ?? firstAvailableDate ?? todayIso;
+  const daySlots = useMemo(
+    () => slots.filter((s) => s.date === selectedDate && mode !== null && slotTeachingMode(s, places) === mode),
+    [slots, selectedDate, mode, places],
+  );
   const selectedSlot = daySlots.find((s) => s.id === selectedSlotId) ?? null;
   const nextDate = useMemo(
     () => availableSlots.map((s) => s.date).filter((d) => d > selectedDate).sort()[0] ?? null,
@@ -109,7 +132,21 @@ export function BookDateScreen() {
           </Text>
         </FadeIn>
 
+        <FadeIn delay={60}>
+          <Text className="mb-[6px] ml-0.5 text-[12.5px] font-semibold uppercase tracking-[0.03em] text-ink-soft">
+            Où souhaitez-vous le cours&nbsp;?
+          </Text>
+          {availableModes.length === 0 ? (
+            <Text className="text-[13.5px] text-ink-soft">Ce tuteur n&apos;a pas encore précisé où il donne ses cours.</Text>
+          ) : (
+            <TeachingModePicker available={availableModes} value={mode} onChange={chooseMode} />
+          )}
+        </FadeIn>
+
+        {mode === null ? null : (
+        <>
         <FadeIn delay={80}>
+          <View className="mt-[20px]" />
           <HabitCalendar
             variant="card"
             selectedDate={selectedDate}
@@ -171,6 +208,8 @@ export function BookDateScreen() {
             )}
           </View>
         </FadeIn>
+        </>
+        )}
 
         <FadeIn delay={160}>
           <Text className="mt-4 text-[12px] leading-[18px] text-ink-faint">
@@ -214,9 +253,6 @@ function TimeSlotRow({ slot, selected, onPress }: TimeSlotRowProps) {
         <View className="flex-row items-center gap-[10px]">
           <ClockIcon size={16} color={!booked && selected ? "#332E86" : "#585B78"} />
           <Text className="text-[14.5px] font-bold text-ink">{slot.timeRangeLabel}</Text>
-          {slot.teachingMode ? (
-            <Text className="text-[11.5px] font-semibold text-primary">{TEACHING_MODE_LABELS[slot.teachingMode]}</Text>
-          ) : null}
         </View>
         {booked ? (
           <Text className="text-[12px] font-semibold text-ink-faint">Pris</Text>

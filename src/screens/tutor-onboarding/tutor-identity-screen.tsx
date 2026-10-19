@@ -17,18 +17,17 @@ import { BirthDateField } from "@/components/ui/birth-date-field";
 import { Button } from "@/components/ui/button";
 import { PhoneInputField } from "@/components/ui/phone-input-field";
 import { StepProgress } from "@/components/ui/step-progress";
-import { TextField } from "@/components/ui/text-field";
 import { useAuthStore } from "@/store/auth.store";
 import { useTutorApplicationStore } from "@/store/tutor-application.store";
 
-const TUTOR_BACKGROUND_ROUTE = "/tutor-background" as Href;
+// L'import de CV est facultatif : il se propose juste avant le parcours, et se passe en un clic.
+const TUTOR_CV_ROUTE = "/tutor-cv" as Href;
 const TOTAL_STEPS = 9;
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[+\d][\d\s-]{7,}$/;
 const BIRTH_DATE_REGEX = /^(\d{2})[/ ]+(\d{2})[/ ]+(\d{4})$/;
 
-type Field = "firstName" | "lastName" | "gender" | "birthDate" | "phone" | "email";
+type Field = "gender" | "birthDate" | "phone";
 type FieldErrors = Partial<Record<Field, string>>;
 
 export function TutorIdentityScreen() {
@@ -39,34 +38,28 @@ export function TutorIdentityScreen() {
   const setIdentity = useTutorApplicationStore((s) => s.setIdentity);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  // L'e-mail du dossier DOIT être celui du compte (le serveur refuse sinon : ACCOUNT_EMAIL_MISMATCH),
-  // y compris si un autre compte a rempli ce formulaire avant. Nom et téléphone sont préremplis une
-  // fois, tant que le formulaire est vierge — le candidat peut les modifier.
+  // Le candidat est déjà inscrit : nom, prénom, e-mail et téléphone viennent de son compte et ne sont plus saisis ici.
+  // L'e-mail du dossier DOIT être celui du compte (le serveur refuse sinon : ACCOUNT_EMAIL_MISMATCH), y compris si
+  // un autre compte a rempli ce formulaire avant : on réaligne donc toujours l'identité sur le compte connecté.
   useEffect(() => {
     if (!authUser) return;
     const patch: Partial<typeof identity> = {};
     if (identity.email !== authUser.email) patch.email = authUser.email;
-    if (!identity.firstName && !identity.lastName) {
-      patch.firstName = authUser.firstName;
-      patch.lastName = authUser.lastName;
-    }
-    if (!identity.phone && authUser.phone) patch.phone = authUser.phone;
+    if (identity.firstName !== authUser.firstName) patch.firstName = authUser.firstName;
+    if (identity.lastName !== authUser.lastName) patch.lastName = authUser.lastName;
+    if (authUser.phone && identity.phone !== authUser.phone) patch.phone = authUser.phone;
     if (Object.keys(patch).length) setIdentity(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser]);
 
+  // Exception : un compte sans téléphone (le dossier tuteur en exige un) le saisit ici.
+  const needsPhone = !authUser?.phone;
+
   const canContinue =
-    identity.firstName.trim().length > 0 &&
-    identity.lastName.trim().length > 0 &&
-    !!identity.gender &&
-    identity.birthDate.trim().length > 0 &&
-    identity.phone.trim().length > 0 &&
-    identity.email.trim().length > 0;
+    !!identity.gender && identity.birthDate.trim().length > 0 && (!needsPhone || identity.phone.trim().length > 0);
 
   const continueToBackground = () => {
     const errors: FieldErrors = {};
-    if (!identity.firstName.trim()) errors.firstName = "Le prénom est requis.";
-    if (!identity.lastName.trim()) errors.lastName = "Le nom est requis.";
     if (!identity.gender) errors.gender = "Indiquez votre sexe : il détermine votre avatar tant que vous n'avez pas de photo.";
 
     const birthMatch = identity.birthDate.trim().match(BIRTH_DATE_REGEX);
@@ -84,11 +77,10 @@ export function TutorIdentityScreen() {
       }
     }
 
-    if (!PHONE_REGEX.test(identity.phone.trim())) errors.phone = "Format de téléphone invalide.";
-    if (!EMAIL_REGEX.test(identity.email.trim())) errors.email = "Format d'email invalide.";
+    if (needsPhone && !PHONE_REGEX.test(identity.phone.trim())) errors.phone = "Format de téléphone invalide.";
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    router.push(TUTOR_BACKGROUND_ROUTE);
+    router.push(TUTOR_CV_ROUTE);
   };
 
   return (
@@ -107,29 +99,14 @@ export function TutorIdentityScreen() {
         showsVerticalScrollIndicator={false}
       >
         <FadeIn delay={40}>
-          <Text className="mb-1 text-[24px] font-bold text-ink">Vos informations personnelles</Text>
-          <Text className="mb-5 text-[13.5px] text-ink-soft">Elles ne sont visibles que par EduLoc</Text>
+          <Text className="mb-1 text-[24px] font-bold text-ink">Quelques informations de plus</Text>
+          <Text className="mb-5 text-[13.5px] text-ink-soft">
+            Votre nom, votre téléphone et votre e-mail sont repris de votre compte. Ces informations ne sont visibles que
+            par EduLoc.
+          </Text>
         </FadeIn>
 
         <FadeIn delay={90}>
-          <TextField
-            label="Prénom"
-            value={identity.firstName}
-            onChangeText={(firstName) => setIdentity({ firstName })}
-            placeholder="Jean"
-            autoComplete="given-name"
-            textContentType="givenName"
-            error={fieldErrors.firstName}
-          />
-          <TextField
-            label="Nom"
-            value={identity.lastName}
-            onChangeText={(lastName) => setIdentity({ lastName })}
-            placeholder="Rakoto"
-            autoComplete="family-name"
-            textContentType="familyName"
-            error={fieldErrors.lastName}
-          />
           {/* Sexe : détermine l'avatar par défaut (silhouette) du tuteur */}
           <View className="mb-[14px]">
             <Text className="mb-[6px] ml-0.5 text-[12.5px] font-semibold uppercase tracking-[0.03em] text-ink-soft">Sexe</Text>
@@ -163,24 +140,14 @@ export function TutorIdentityScreen() {
             onChangeText={(birthDate) => setIdentity({ birthDate })}
             error={fieldErrors.birthDate}
           />
-          <PhoneInputField
-            label="Téléphone"
-            value={identity.phone}
-            onChangeText={(phone) => setIdentity({ phone })}
-            error={fieldErrors.phone}
-          />
-          <TextField
-            label="Email du compte"
-            value={identity.email}
-            onChangeText={(email) => setIdentity({ email })}
-            placeholder="jean.rakoto@email.com"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoComplete="email"
-            textContentType="emailAddress"
-            error={fieldErrors.email}
-            editable={false}
-          />
+          {needsPhone ? (
+            <PhoneInputField
+              label="Téléphone"
+              value={identity.phone}
+              onChangeText={(phone) => setIdentity({ phone })}
+              error={fieldErrors.phone}
+            />
+          ) : null}
         </FadeIn>
       </ScrollView>
 

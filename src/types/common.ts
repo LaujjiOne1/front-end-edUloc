@@ -14,6 +14,8 @@ export interface LevelRef {
   category?: string;
   /** Diplôme minimal pour enseigner ce niveau. */
   requiredDegree?: DegreeId;
+  /** Filière à choisir ensuite : série (Première, Terminale), mention (université) ou aucune. */
+  trackKind?: "serie" | "mention" | null;
 }
 /** Sexe du tuteur : choisit sa silhouette par défaut (sans photo). */
 export type TutorGender = "male" | "female";
@@ -22,4 +24,7 @@ export type DegreeId = "bac" | "licence" | "master" | "doctorat" | "other";
 export type FormatId = "in_person" | "online";
 /** Format d'une offre / préférence (TeachingFormat) */
 export type LocationFormatId = "in_person" | "online" | "both";
+
+/** Façons de donner un cours en présentiel : le tuteur se déplace chez l'élève, accueille chez lui, ou se retrouve dans un lieu public. */
+export type InPersonModeId = "beneficiary_home" | "tutor_home" | "public_place";
 export type AvatarTone = "primary" | "violet" | "accent" | "success" | "warning";

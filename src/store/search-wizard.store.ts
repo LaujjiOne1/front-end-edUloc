@@ -1,113 +1,76 @@
 import { create } from "zustand";
 
 import type { Category } from "@/types/category";
-import type { LocationFormatId } from "@/types/common";
-import type { BeneficiaryType, EducationLevel, LearningObjective, SearchCriteria } from "@/types/search";
+import type { EducationLevel, SearchCriteria } from "@/types/search";
+import type { AcademicTrack } from "@/types/track";
 
+/**
+ * La recherche suit l'entonnoir Niveau → Filière (série / mention, selon le niveau) → Matière. Le reste (pour qui, où,
+ * objectif, précision du besoin) n'a d'utilité qu'une fois le tuteur choisi : il est demandé à la réservation
+ * (booking-wizard.store).
+ */
 export interface SearchWizardCriteria {
-  subject: Category | null;
   level: EducationLevel | null;
-  beneficiary: BeneficiaryType | null;
-  location: {
-    query: string;
-    useCurrentPosition: boolean;
-    format: LocationFormatId;
-    coordinates: { latitude: number; longitude: number } | null;
-  };
-  objective: LearningObjective | null;
-  detail: { note: string };
+  track: AcademicTrack | null;
+  subject: Category | null;
 }
 
 const INITIAL_CRITERIA: SearchWizardCriteria = {
-  subject: null,
   level: null,
-  beneficiary: null,
-  location: { query: "", useCurrentPosition: false, format: "in_person", coordinates: null },
-  objective: null,
-  detail: { note: "" },
+  track: null,
+  subject: null,
 };
 
 interface SearchWizardStore {
   criteria: SearchWizardCriteria;
-  setSubject: (subject: Category) => void;
+  /** Changer de niveau invalide la filière et la matière choisies (elles dépendent du niveau). */
   setLevel: (level: EducationLevel) => void;
-  setBeneficiary: (beneficiary: BeneficiaryType) => void;
-  setLocationQuery: (query: string) => void;
-  setCurrentPositionLabel: (label: string, coordinates: { latitude: number; longitude: number }) => void;
-  /** Adresse saisie, résolue en coordonnées par le géocodage (≠ position GPS de l'appareil). */
-  setGeocodedLocation: (label: string, coordinates: { latitude: number; longitude: number }) => void;
-  setLocationFormat: (format: LocationFormatId) => void;
-  setObjective: (objective: LearningObjective) => void;
-  setDetailNote: (note: string) => void;
+  /** Changer de filière invalide la matière (la liste dépend de la série). */
+  setTrack: (track: AcademicTrack) => void;
+  setSubject: (subject: Category) => void;
   reset: () => void;
 }
 
 /**
- * Holds the selections made across the Need → Level → ForWhom → Location →
- * Objective wizard so that navigating back and forth between those steps
- * never loses previously entered data. `reset()` is called from the Home
- * screen's "goToSearch" so every fresh search starts from a clean state.
+ * Holds the selections made across the Level → Track → Need wizard so that navigating back and forth between those steps
+ * never loses previously entered data. `reset()` is called from the Home screen's "goToSearch" so every fresh
+ * search starts from a clean state.
  *
- * This keeps the rich display objects (Category, EducationLevel, ...) the
- * wizard screens already render — the flat `SearchCriteria` the API expects
- * (subjectId/levelId/coordinates...) is derived only at the point of calling
+ * This keeps the rich display objects (Category, EducationLevel) the wizard screens already render — the flat
+ * `SearchCriteria` the API expects (subjectId/levelId/coordinates...) is derived only at the point of calling
  * TutorService.searchTutors, via `toSearchCriteria` below.
  */
 export const useSearchWizardStore = create<SearchWizardStore>((set) => ({
   criteria: INITIAL_CRITERIA,
 
+  setLevel: (level) =>
+    set((s) => (s.criteria.level?.id === level.id ? s : { criteria: { level, track: null, subject: null } })),
+
+  setTrack: (track) =>
+    set((s) => (s.criteria.track?.id === track.id ? s : { criteria: { ...s.criteria, track, subject: null } })),
+
   setSubject: (subject) => set((s) => ({ criteria: { ...s.criteria, subject } })),
-
-  setLevel: (level) => set((s) => ({ criteria: { ...s.criteria, level } })),
-
-  setBeneficiary: (beneficiary) => set((s) => ({ criteria: { ...s.criteria, beneficiary } })),
-
-  setLocationQuery: (query) =>
-    set((s) => ({
-      criteria: {
-        ...s.criteria,
-        location: { ...s.criteria.location, query, useCurrentPosition: false, coordinates: null },
-      },
-    })),
-
-  setCurrentPositionLabel: (label, coordinates) =>
-    set((s) => ({
-      criteria: {
-        ...s.criteria,
-        location: { ...s.criteria.location, query: label, useCurrentPosition: true, coordinates },
-      },
-    })),
-
-  setGeocodedLocation: (label, coordinates) =>
-    set((s) => ({
-      criteria: {
-        ...s.criteria,
-        location: { ...s.criteria.location, query: label, useCurrentPosition: false, coordinates },
-      },
-    })),
-
-  setLocationFormat: (format) =>
-    set((s) => ({ criteria: { ...s.criteria, location: { ...s.criteria.location, format } } })),
-
-  setObjective: (objective) => set((s) => ({ criteria: { ...s.criteria, objective } })),
-
-  setDetailNote: (note) => set((s) => ({ criteria: { ...s.criteria, detail: { note } } })),
 
   reset: () => set({ criteria: INITIAL_CRITERIA }),
 }));
 
-/** Flattens the wizard's rich criteria into the shape TutorService.searchTutors expects. */
+/**
+ * Flattens the wizard's criteria into the shape TutorService.searchTutors expects. Sans position, la recherche ne
+ * porte que sur les cours en ligne (l'API exige des coordonnées pour le présentiel).
+ */
 export function toSearchCriteria(
   criteria: SearchWizardCriteria,
   coordinates: { latitude: number; longitude: number } | null,
 ): SearchCriteria {
   return {
-    subjectId: criteria.subject?.id ?? "",
+    subjectId: criteria.subject?.freeText ? "" : (criteria.subject?.id ?? ""),
+    subjectText: criteria.subject?.freeText ? criteria.subject.label : undefined,
     levelId: criteria.level?.id,
-    beneficiaryType: criteria.beneficiary?.id,
-    locationQuery: criteria.location.query.trim() || undefined,
+    trackId: criteria.track?.id,
     coordinates,
-    format: criteria.location.format,
-    objectiveId: criteria.objective?.id,
+    format: coordinates ? "both" : "online",
+    levelCategory: criteria.level?.category,
+    levelLabel: criteria.level?.label,
+    subjectLabel: criteria.subject?.label,
   };
 }

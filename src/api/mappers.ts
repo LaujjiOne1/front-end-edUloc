@@ -7,6 +7,7 @@ import * as F from "./format/datetime";
 import type { AuthenticatedUser } from "@/types/auth";
 import type { AvatarTone, FormatId, LevelRef, LocationFormatId, TutorGender } from "@/types/common";
 import type { Category } from "@/types/category";
+import type { AcademicTrack } from "@/types/track";
 import type { BeneficiaryType, EducationLevel, LearningObjective, LocationFormatOption } from "@/types/search";
 import type { Offer, OfferPlace, OfferSlot } from "@/types/offer";
 import type { Tutor, TutorOfferSummary } from "@/types/tutor";
@@ -70,12 +71,29 @@ export function avatarTone(id: string): AvatarTone {
 const initial = (s: string | null | undefined) => (s?.trim()[0] ?? "?").toUpperCase();
 
 // ---------- référentiels ----------
-export const toCategory = (s: D.SubjectDto): Category => ({ id: s.id, label: s.name, group: s.category });
+export const toCategory = (s: D.SubjectDto): Category => ({
+  id: s.id,
+  label: s.name,
+  group: s.category,
+  levelCategories: s.levelCategories ?? [],
+  trackCodes: s.trackCodes ?? [],
+});
 export const toLevel = (l: D.EducationLevelDto): LevelRef => ({
   id: l.id,
   label: l.name,
   category: l.category,
   requiredDegree: l.requiredDegree ? (lower(l.requiredDegree) as LevelRef["requiredDegree"]) : undefined,
+  // undefined = niveau imbriqué dans une autre réponse (le serveur ne le renseigne que dans le catalogue des niveaux).
+  trackKind: l.trackKind === undefined ? undefined : l.trackKind ? (lower(l.trackKind) as LevelRef["trackKind"]) : null,
+});
+export const toTrack = (t: D.AcademicTrackDto): AcademicTrack => ({
+  id: t.id,
+  kind: lower(t.kind) as AcademicTrack["kind"],
+  code: t.code,
+  label: t.name,
+  domain: t.domain,
+  programme: t.programme ? (lower(t.programme) as NonNullable<AcademicTrack["programme"]>) : null,
+  levelName: t.levelName,
 });
 export const toEducationLevel = (l: D.EducationLevelDto): EducationLevel => toLevel(l);
 export const toBeneficiaryType = (o: D.EnumOptionDto<D.RelationshipType>): BeneficiaryType => ({
@@ -193,7 +211,7 @@ export const toTutorOfferSummary = (o: D.OfferSummaryDto): TutorOfferSummary => 
 });
 
 // ---------- tuteurs ----------
-function nextSlotLabel(iso: string | null): string {
+export function nextSlotLabel(iso: string | null): string {
   if (!iso) return "Aucun créneau cette semaine";
   const p = F.toLocalParts(iso);
   const h = p.minutes ? `${p.hours}h${String(p.minutes).padStart(2, "0")}` : `${p.hours}h`;

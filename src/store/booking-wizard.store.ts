@@ -14,6 +14,10 @@ interface BookingWizardStore {
   beneficiaryAddress: string;
   /** DifficultyId ("theoretical" | "practical" | ...) — empty string means "not set". */
   difficulty: string;
+  /** Objectif pédagogique ("remedial" | "ongoing" | "excellence") — vide tant qu'il n'est pas choisi. */
+  objective: string;
+  /** Précision du besoin, envoyée au tuteur (requesterNote) — facultative. */
+  note: string;
   /** Id of the Booking BookingSummary just created — lets BookingPending's "Voir la demande" open the real 23_BookingDetailPending. */
   createdBookingId: string | null;
   /** Même clé pour toutes les tentatives d'envoi d'une demande (Idempotency-Key) ; renouvelée si l'offre/le créneau change. */
@@ -24,6 +28,8 @@ interface BookingWizardStore {
   setBeneficiary: (beneficiary: SavedBeneficiary) => void;
   setBeneficiaryAddress: (address: string) => void;
   setDifficulty: (difficulty: string) => void;
+  setObjective: (objective: string) => void;
+  setNote: (note: string) => void;
   setCreatedBookingId: (id: string) => void;
   reset: () => void;
 }
@@ -34,13 +40,17 @@ const INITIAL_STATE = {
   beneficiary: null,
   beneficiaryAddress: "",
   difficulty: "",
+  objective: "",
+  note: "",
   createdBookingId: null,
   idempotencyKey: "",
 };
 
 /**
  * Holds the offer/slot picked on BookDate plus the beneficiary chosen (or
- * just created) on Beneficiary, so none of it is lost while the user detours
+ * just created) on Beneficiary and the need (objective, difficulty, note) given on
+ * BeneficiaryProfile — asked here rather than in the search, since it only matters
+ * once a tutor is chosen — so none of it is lost while the user detours
  * through Login/Signup/Verify (AGENTS.md §13: navigation must never drop
  * already-entered data). Reset once the request has actually been sent
  * (BookingPending's "Retour à l'accueil"), mirroring how the search wizard is
@@ -58,6 +68,10 @@ export const useBookingWizardStore = create<BookingWizardStore>((set) => ({
   setBeneficiaryAddress: (beneficiaryAddress) => set({ beneficiaryAddress }),
 
   setDifficulty: (difficulty) => set({ difficulty }),
+
+  setObjective: (objective) => set({ objective }),
+
+  setNote: (note) => set({ note }),
 
   setCreatedBookingId: (createdBookingId) => set({ createdBookingId }),
 

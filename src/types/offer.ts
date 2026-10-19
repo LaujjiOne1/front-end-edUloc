@@ -60,6 +60,8 @@ export interface CreateOfferInput {
   description: string;
   subjectId: string;
   levelId: string | null;
+  /** Série (Première/Terminale, obligatoire) ou mention (université, facultative). */
+  trackId?: string | null;
   format: LocationFormatId;
   durationMinutes: number;
   price: number;

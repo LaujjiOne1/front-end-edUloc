@@ -165,6 +165,8 @@ export interface SubjectDto {
   description: string | null;
   /** Catégories de niveaux où la matière s'enseigne ; vide = tous. */
   levelCategories?: string[];
+  /** Séries du lycée (codes) pour lesquelles la matière est proposée ; vide = toutes. */
+  trackCodes?: string[];
   /** false = compétence libre d'un tuteur, pas encore au catalogue. */
   isVerified?: boolean;
 }
@@ -181,6 +183,20 @@ export interface EducationLevelDto {
   category: string;
   displayOrder: number;
   requiredDegree?: "BAC" | "LICENCE" | "MASTER" | "DOCTORAT";
+  /** Filière à choisir après ce niveau (GET /catalog/education-levels). */
+  trackKind?: TrackKindDto | null;
+}
+export type TrackKindDto = "SERIE" | "MENTION";
+/** GET /catalog/tracks : série du lycée ou mention universitaire (avec son Domaine mère). */
+export interface AcademicTrackDto {
+  id: Uuid;
+  kind: TrackKindDto;
+  code: string;
+  name: string;
+  domain: string | null;
+  programme: "NOUVEAU" | "ANCIEN" | null;
+  /** Série : niveau auquel elle appartient (« Première » ou « Terminale »). */
+  levelName: string | null;
 }
 export interface EnumOptionDto<V extends string = string> {
   value: V;
@@ -286,6 +302,8 @@ export interface OfferDto extends OfferSummaryDto {
 export interface CreateOfferRequestDto {
   subjectId: Uuid;
   educationLevelId?: Uuid | null;
+  /** Série (Première/Terminale, obligatoire) ou mention (université). */
+  trackId?: Uuid | null;
   title: string;
   description: string;
   format: TeachingFormat;
@@ -533,6 +551,30 @@ export interface SearchOfferRowDto {
   longitude: number | null;
   nextSlots: SlotDto[];
 }
+/** POST /matching/search (niveau universitaire) : tuteurs ÉLIGIBLES par le niveau, classés par pertinence. */
+export interface MatchingResultDto {
+  tutorProfileId: string;
+  displayName: string;
+  profilePhoto: string | null;
+  rating: number;
+  reviewsCount: number;
+  /** Libellés (jamais d'extrait de document) : « Matière : … », « Diplôme vérifié »… */
+  matchReasons: string[];
+  offers: { id: string; title: string; price: string; currency: string; format: TeachingFormat }[];
+  nextSlots: SlotDto[];
+  hasNearSlot: boolean;
+}
+export interface MatchingSearchResponseDto {
+  searchId: string;
+  results: MatchingResultDto[];
+  reason?: "NO_TUTOR_FOR_LEVEL" | "NO_TUTOR_FOR_FORMAT" | "NO_RELEVANT_TUTOR";
+}
+/** Niveau non universitaire : le serveur applique la recherche classique (mêmes résultats que GET /search/offers). */
+export interface ClassicMatchingResponseDto {
+  mode: "CLASSIC";
+  results: SearchResultDto[];
+  reason?: "NO_TUTOR_FOR_LEVEL" | "NO_TUTOR_FOR_FORMAT";
+}
 export interface SearchResultDto {
   tutor: TutorSummaryDto;
   subjects: string[];
@@ -558,10 +600,12 @@ export interface TutorApplicationInputDto {
   highestDegree?: DegreeDto | null;
   gender?: TutorGenderDto | null;
   experiences: {
-    type: "PROFESSIONAL" | "ACADEMIC";
+    type: "TEACHING" | "SUPERVISION" | "PROFESSIONAL" | "ACADEMIC" | "VOLUNTEER";
     title: string;
     organization: string;
     period: string;
+    audience?: string[];
+    subjectsTaught?: string | null;
     description?: string | null;
   }[];
   subjects: TutorSubjectInputDto[];
@@ -599,10 +643,12 @@ export interface TutorApplicationDto {
   documents: TutorDocumentDto[];
   experiences?: {
     id: Uuid;
-    type: "PROFESSIONAL" | "ACADEMIC";
+    type: "TEACHING" | "SUPERVISION" | "PROFESSIONAL" | "ACADEMIC" | "VOLUNTEER";
     title: string;
     organization: string;
     period: string;
+    audience?: string[];
+    subjectsTaught?: string | null;
     description: string | null;
   }[];
   introVideo?: {

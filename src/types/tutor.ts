@@ -33,6 +33,8 @@ export interface Tutor {
   nextSlotLabel: string;
   bio: string;
   offers: TutorOfferSummary[];
+  /** Recherche sémantique : pourquoi ce tuteur ressort (libellés « Matière : … », « Diplôme vérifié »…). */
+  matchReasons?: string[];
   /** [v1+] Détail matière × niveau (profil public uniquement) */
   subjectLevels?: { subjectLabel: string; levels: LevelRef[] }[];
 }

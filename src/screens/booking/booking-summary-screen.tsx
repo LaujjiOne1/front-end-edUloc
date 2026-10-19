@@ -13,11 +13,17 @@ import { FormError } from "@/components/ui/form-error";
 import { StepProgress } from "@/components/ui/step-progress";
 import { useCreateBooking } from "@/hooks/use-create-booking";
 import { useBookingWizardStore } from "@/store/booking-wizard.store";
-import { useSearchWizardStore } from "@/store/search-wizard.store";
 import type { TeachingModeId } from "@/types/booking";
 
 const BOOKING_PENDING_ROUTE = "/booking-pending" as Href;
 const BOOK_DATE_ROUTE = "/results/book" as Href;
+const BENEFICIARY_PROFILE_ROUTE = "/beneficiary-profile" as Href;
+
+const OBJECTIVE_LABELS: Record<string, string> = {
+  remedial: "Remise à niveau",
+  ongoing: "Accompagnement régulier",
+  excellence: "Approfondir",
+};
 
 /** Derives the booking's teaching mode from the chosen slot's place — every
  * slot shown on BookDate already comes from one specific availability/place,
@@ -41,7 +47,8 @@ export function BookingSummaryScreen() {
   const setBeneficiaryAddress = useBookingWizardStore((s) => s.setBeneficiaryAddress);
   const setCreatedBookingId = useBookingWizardStore((s) => s.setCreatedBookingId);
   const idempotencyKey = useBookingWizardStore((s) => s.idempotencyKey);
-  const note = useSearchWizardStore((s) => s.criteria.detail.note);
+  const note = useBookingWizardStore((s) => s.note);
+  const objective = useBookingWizardStore((s) => s.objective);
   const { state, submit } = useCreateBooking();
 
   // Guard: a full recap needs an offer, a slot, and a chosen beneficiary —
@@ -112,6 +119,8 @@ export function BookingSummaryScreen() {
             <Divider />
             <SummaryRow label="Bénéficiaire" value={beneficiary.isSelf ? "Vous" : beneficiary.firstName} />
             <Divider />
+            <SummaryRow label="Objectif" value={OBJECTIVE_LABELS[objective] ?? "—"} />
+            <Divider />
             <SummaryRow label="Date" value={slot.dateLabel} icon={<CalendarIcon size={15} color="#9799AF" />} />
             <Divider />
             <SummaryRow label="Horaire" value={slot.timeRangeLabel} icon={<ClockIcon size={15} color="#9799AF" />} />
@@ -145,17 +154,20 @@ export function BookingSummaryScreen() {
         ) : null}
 
         <FadeIn delay={120}>
-          <View className="mt-[14px] flex-row items-center gap-3 rounded-lg border border-line bg-surface p-4">
-            <View className="h-9 w-9 items-center justify-center rounded-full bg-accent-tint">
-              <MicIcon size={16} color="#0E9C82" />
+          <PressableScale onPress={() => router.push(BENEFICIARY_PROFILE_ROUTE)} accessibilityLabel="Modifier votre besoin">
+            <View className="mt-[14px] flex-row items-center gap-3 rounded-lg border border-line bg-surface p-4">
+              <View className="h-9 w-9 items-center justify-center rounded-full bg-accent-tint">
+                <MicIcon size={16} color="#0E9C82" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-[12px] text-ink-soft">Besoin</Text>
+                <Text className="text-[14px] font-bold text-ink" numberOfLines={2}>
+                  {note.trim() ? note.trim() : "Aucune précision ajoutée"}
+                </Text>
+              </View>
+              <Text className="text-[12.5px] font-bold text-primary">Modifier</Text>
             </View>
-            <View className="flex-1">
-              <Text className="text-[12px] text-ink-soft">Besoin</Text>
-              <Text className="text-[14px] font-bold text-ink" numberOfLines={2}>
-                {note.trim() ? note.trim() : "Aucune précision ajoutée"}
-              </Text>
-            </View>
-          </View>
+          </PressableScale>
         </FadeIn>
 
         <FadeIn delay={150}>

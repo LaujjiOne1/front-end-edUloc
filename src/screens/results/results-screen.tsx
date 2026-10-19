@@ -29,7 +29,7 @@ export function ResultsScreen({ initialTab = "list" }: ResultsScreenProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const criteria = useSearchWizardStore((s) => s.criteria);
-  const { state, retry, origin } = useTutorSearch(criteria);
+  const { state, retry, origin, originLabel, locationNotice } = useTutorSearch(criteria);
 
   // Visiteur non connecté : on annonce « N tuteurs disponibles près de vous », les résultats viennent après connexion.
   const pathname = usePathname();
@@ -52,10 +52,7 @@ export function ResultsScreen({ initialTab = "list" }: ResultsScreenProps) {
   const selectedMapTutor =
     tutors.find((t) => t.id === selectedMapTutorId) ?? tutors[0] ?? null;
 
-  const locationLabel =
-    criteria.location.query ||
-    (criteria.location.format === "online" ? "En ligne" : "Localisation non précisée");
-  const breadcrumb = [criteria.subject?.label, criteria.level?.label, locationLabel]
+  const breadcrumb = [criteria.subject?.label, criteria.level?.label, originLabel ?? "En ligne"]
     .filter(Boolean)
     .join(" • ");
 
@@ -84,6 +81,17 @@ export function ResultsScreen({ initialTab = "list" }: ResultsScreenProps) {
             ) : null}
           </Text>
         </FadeIn>
+
+        {locationNotice && state.status !== "loading" ? (
+          <FadeIn delay={50}>
+            <View className="mb-3 flex-row items-center gap-3 rounded-lg bg-surface-tint px-3 py-2.5">
+              <Text className="flex-1 text-[12.5px] text-ink-soft">{locationNotice}</Text>
+              <PressableScale onPress={retry} accessibilityLabel="Réessayer avec ma position">
+                <Text className="text-[12.5px] font-bold text-primary">Réessayer</Text>
+              </PressableScale>
+            </View>
+          </FadeIn>
+        ) : null}
 
         {/* Animated Segmented Tab Switch: gliding pill between "Liste" and "Carte" */}
         {showGate ? null : <FadeIn delay={70}>
@@ -156,7 +164,7 @@ export function ResultsScreen({ initialTab = "list" }: ResultsScreenProps) {
               tutors={tutors}
               selectedTutorId={selectedMapTutor?.id ?? null}
               onSelectTutor={(tutor) => setSelectedMapTutorId(tutor.id)}
-              searchLocationQuery={criteria.location.query}
+              searchLocationQuery={originLabel ?? ""}
               origin={origin}
             />
           )}

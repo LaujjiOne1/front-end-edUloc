@@ -3,10 +3,16 @@ import { ApiError } from "@/api/errors";
 import { toSkill, toTutorApplication, upper } from "@/api/mappers";
 import type { CreateSubjectResultDto, DegreeDto, TutorGenderDto, SubjectDto, TutorApplicationDto, TutorApplicationInputDto, TutorDocumentType, UploadTicketDto } from "@/api/contracts/dto";
 import { uploadToSignedUrl } from "@/api/upload";
-import type { DegreeId } from "@/types/common";
+import type { DegreeId, InPersonModeId } from "@/types/common";
 import type { TutorApplication, TutorApplicationSubmission, TutorSkill } from "@/types/tutor-application";
 
 export { ApiError as TutorApplicationServiceError };
+
+const PLACE_TYPE_BY_KIND: Record<InPersonModeId, "BENEFICIARY_HOME" | "TUTOR_HOME" | "PUBLIC_PLACE"> = {
+  beneficiary_home: "BENEFICIARY_HOME",
+  tutor_home: "TUTOR_HOME",
+  public_place: "PUBLIC_PLACE",
+};
 
 /**
  * Routes : GET /catalog/subjects (catalogue), GET /catalog/subjects/suggest (autocomplétion selon le diplôme),
@@ -66,6 +72,7 @@ export const TutorApplicationService = {
       offers: s.offers.map((offer) => ({
         subjectId: offer.subjectId,
         educationLevelId: offer.educationLevelId,
+        ...(offer.trackId ? { trackId: offer.trackId } : {}),
         title: offer.title,
         description: offer.description,
         format: upper(offer.format) as "ONLINE" | "IN_PERSON" | "BOTH",
@@ -73,11 +80,11 @@ export const TutorApplicationService = {
         price: offer.price,
         currency: offer.currency,
       })),
-      // Zone principale : le tuteur se déplace chez l'élève (BENEFICIARY_HOME) ; lieux secondaires : points de rencontre.
+      // Zone de déplacement (BENEFICIARY_HOME), adresse d'accueil (TUTOR_HOME) ou point de rencontre (PUBLIC_PLACE).
       places: s.locations.map((location) => ({
         label: location.label,
         address: location.label,
-        type: location.isPrimary ? "BENEFICIARY_HOME" : "PUBLIC_PLACE",
+        type: PLACE_TYPE_BY_KIND[location.kind],
         latitude: location.latitude,
         longitude: location.longitude,
         radiusMeters: Math.round(location.radiusKm * 1000),

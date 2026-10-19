@@ -1,5 +1,5 @@
 import { type Href, useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -42,7 +42,6 @@ export function BeneficiaryScreen() {
   const offer = useBookingWizardStore((s) => s.offer);
   const chosenBeneficiary = useBookingWizardStore((s) => s.beneficiary);
   const setBeneficiary = useBookingWizardStore((s) => s.setBeneficiary);
-  const searchBeneficiary = useSearchWizardStore((s) => s.criteria.beneficiary);
   const searchLevel = useSearchWizardStore((s) => s.criteria.level);
 
   const { state: beneficiariesState } = useMyBeneficiaries();
@@ -53,13 +52,15 @@ export function BeneficiaryScreen() {
   const [isAdding, setIsAdding] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
 
-  // "Relation to yourself" is meaningless — only ask it when the search
-  // wizard's beneficiary type wasn't "self".
-  const needsRelation = searchBeneficiary?.id !== "self";
-
-  // « Pour moi » : aucune information à (re)saisir — le bénéficiaire est le compte lui-même, on passe l'étape.
-  const { state: selfState, retry: retrySelf } = useSelfBeneficiary(!needsRelation && !!offer, searchLevel?.id ?? null);
+  // « Pour qui » n'est plus demandé dans la recherche : c'est ici que le bénéficiaire se choisit. Le compte lui-même
+  // (« Moi-même ») est créé ou retrouvé côté serveur pour toujours figurer dans la liste.
+  const { state: selfState } = useSelfBeneficiary(!!offer, searchLevel?.id ?? null);
   const selfBeneficiary = selfState.status === "ready" ? selfState.beneficiary : null;
+  const beneficiaries = useMemo<SavedBeneficiary[]>(() => {
+    if (beneficiariesState.status !== "success") return [];
+    const saved = beneficiariesState.beneficiaries;
+    return selfBeneficiary && !saved.some((b) => b.id === selfBeneficiary.id) ? [selfBeneficiary, ...saved] : saved;
+  }, [beneficiariesState, selfBeneficiary]);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -74,16 +75,13 @@ export function BeneficiaryScreen() {
     }, []),
   );
 
-  // Once the address book loads, default to the beneficiary already saved on
-  // the wizard, or the account's own "(vous)" entry if this search wasn't for
-  // someone else.
+  // Once the address book loads, default to the beneficiary already chosen for this booking, else to the
+  // account's own "(vous)" entry — the most common case.
   useEffect(() => {
     if (selectedId || isAdding || beneficiariesState.status !== "success") return;
-    const preselect =
-      beneficiariesState.beneficiaries.find((b) => b.id === chosenBeneficiary?.id) ??
-      (!needsRelation ? beneficiariesState.beneficiaries.find((b) => b.isSelf) : null);
+    const preselect = beneficiaries.find((b) => b.id === chosenBeneficiary?.id) ?? beneficiaries.find((b) => b.isSelf);
     if (preselect) setSelectedId(preselect.id);
-  }, [beneficiariesState, chosenBeneficiary, needsRelation, selectedId, isAdding]);
+  }, [beneficiaries, beneficiariesState.status, chosenBeneficiary, selectedId, isAdding]);
 
   // Guard: Beneficiary only makes sense once an offer/slot has been picked
   // on BookDate — including the case of reaching here via Login/Signup/Verify
@@ -92,24 +90,7 @@ export function BeneficiaryScreen() {
     if (!offer) router.replace("/home");
   }, [offer, router]);
 
-  // Une fois résolu, on REMPLACE l'écran (le retour ne ramène pas ici pour repartir aussitôt en avant).
-  useEffect(() => {
-    if (!needsRelation && selfBeneficiary && offer) {
-      setBeneficiary(selfBeneficiary);
-      router.replace(BENEFICIARY_PROFILE_ROUTE);
-    }
-  }, [needsRelation, selfBeneficiary, offer, setBeneficiary, router]);
-
   if (!offer) return null;
-
-  if (!needsRelation && selfState.status !== "error") {
-    return (
-      <View className="flex-1 items-center justify-center gap-3 bg-paper" style={{ paddingTop: insets.top }}>
-        <ActivityIndicator color="#332E86" />
-        <Text className="text-[13.5px] text-ink-soft">Préparation de votre demande…</Text>
-      </View>
-    );
-  }
 
   const levelOptions: SelectOption[] =
     levelsState.status === "success" ? levelsState.levels.map((l) => ({ id: l.id, label: l.label })) : [];
@@ -118,7 +99,7 @@ export function BeneficiaryScreen() {
     firstName.trim().length > 0 &&
     lastName.trim().length > 0 &&
     !!level &&
-    (!needsRelation || !!relation) &&
+    !!relation &&
     createState.status !== "loading";
 
   const canContinue = (isAdding ? false : !!selectedId) && !isNavigating;
@@ -131,8 +112,7 @@ export function BeneficiaryScreen() {
 
   const handleContinue = () => {
     if (!canContinue) return;
-    const beneficiary =
-      beneficiariesState.status === "success" ? beneficiariesState.beneficiaries.find((b) => b.id === selectedId) : null;
+    const beneficiary = beneficiaries.find((b) => b.id === selectedId);
     if (beneficiary) continueWithBeneficiary(beneficiary);
   };
 
@@ -141,7 +121,7 @@ export function BeneficiaryScreen() {
     const created = await createBeneficiary({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
-      relationship: needsRelation ? (relation!.id as Exclude<Relationship, "self">) : "other",
+      relationship: relation!.id as Exclude<Relationship, "self">,
       levelId: level.id,
     });
     if (created) continueWithBeneficiary(created);
@@ -160,21 +140,8 @@ export function BeneficiaryScreen() {
       >
         <FadeIn delay={40}>
           <Text className="mb-1 text-[24px] font-bold text-ink">Qui va suivre le cours&nbsp;?</Text>
-          {searchBeneficiary ? (
-            <Text className="mb-5 text-[13.5px] text-ink-soft">Vous avez indiqué « {searchBeneficiary.label} »</Text>
-          ) : (
-            <View className="mb-5" />
-          )}
+          <Text className="mb-5 text-[13.5px] text-ink-soft">Le demandeur n&apos;est pas toujours le bénéficiaire</Text>
         </FadeIn>
-
-        {!needsRelation && selfState.status === "error" ? (
-          <View className="mb-4 gap-2">
-            <FormError message={selfState.message} />
-            <PressableScale onPress={retrySelf} accessibilityLabel="Réessayer">
-              <Text className="text-[13.5px] font-semibold text-primary">Réessayer</Text>
-            </PressableScale>
-          </View>
-        ) : null}
 
         {beneficiariesState.status === "loading" ? (
           <View className="items-center py-10">
@@ -185,7 +152,7 @@ export function BeneficiaryScreen() {
         ) : (
           <FadeIn delay={90}>
             <View className="gap-[10px]">
-              {beneficiariesState.beneficiaries.map((beneficiary) => (
+              {beneficiaries.map((beneficiary) => (
                 <PressableScale
                   key={beneficiary.id}
                   onPress={() => {
@@ -250,9 +217,7 @@ export function BeneficiaryScreen() {
             <View className="mt-3">
               <TextField label="Prénom" value={firstName} onChangeText={setFirstName} placeholder="Thomas" />
               <TextField label="Nom" value={lastName} onChangeText={setLastName} placeholder="Rakoto" />
-              {needsRelation ? (
-                <SelectField label="Relation" value={relation} options={RELATION_OPTIONS} onSelect={setRelation} />
-              ) : null}
+              <SelectField label="Relation" value={relation} options={RELATION_OPTIONS} onSelect={setRelation} />
               <SelectField
                 label="Niveau"
                 value={level}
